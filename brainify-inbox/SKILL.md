@@ -1,0 +1,206 @@
+---
+name: brainify-inbox
+description: sources/00_inbox/ 의 PDF 들을 Docling+MinerU 듀얼 파싱·요약하고, Claude 가 두 출력의 diff 를 시각 검증한 뒤 PARA 분류·파일명을 제안 → Dr. Ben 승인 → sources/ 정식 위치로 이동 + knowledge/ 동반 노트 생성하는 인터랙티브 스킬. "인박스 브레인화", "PDF 정리해줘", "오늘 들어온 자료 처리", "/brainify-inbox" 류 트리거.
+allowed_tools: [bash, read, write, edit]
+status: design-only
+---
+
+# brainify-inbox
+
+`~/projects/2nd-brain-vault/sources/00_inbox/` staging 폴더의 PDF 자료를 듀얼 엔진 (Docling + MinerU) 으로 로컬 파싱하고, Claude 가 두 출력을 시각 검증한 뒤, PARA 분류·파일명·동반 노트 초안을 Dr. Ben 에게 제안. 승인 후 일괄 이동 + 동반 노트 생성. 외부 API 호출 0 (재무자료 leak 방지).
+
+## 거버넌스
+
+이 스킬의 **spec 권위 원본은 같은 디렉토리의 `PROGRESS.md` (mini SDD)**. §Spec·§Plan 변경은 Dr. Ben 승인 후 PROGRESS.md 가 먼저 갱신되고, 본 SKILL.md 는 그 위에서 정렬. 본 SKILL.md 는 *런타임 절차서* 만 담음 (왜·무엇을 만드는가는 PROGRESS.md 참조).
+
+호출 시 모델은 먼저 PROGRESS.md 의 §Tasks 현재 진행 상태를 확인. 미완료 항목 (Phase 0~1) 이 남아 있으면 *구현이 아직 안 됨* 을 보고하고 종료 — `status: design-only` 시그널.
+
+## OpenClaw SKILL_CONTRACT 와의 정렬·예외
+
+본 스킬은 `~/.openclaw/workspace/SKILL_CONTRACT.md` (L1) 를 Claude Code 의미로 재해석해 적용한다 (Dr. Ben 결정 2026-05-13, Q2=a):
+
+### 정렬
+
+- **§1 frontmatter** — 그대로 (`name`·`description`·`allowed_tools` 명시).
+- **§4 exit code** — 컨테이너 호출 (`docker compose run brain-pdf ...`) 의 exit code 를 신뢰. 0 이외는 비정상 보고.
+- **§5 수동 테스트** — 공유 라이브러리 entrypoint 가 *Claude 매개 없이* 직접 호출 가능해야 함:
+  ```bash
+  docker compose -f ~/projects/2nd-brain-docker/compose.yaml run --rm brain-pdf parse-docling <pdf>
+  docker compose -f ~/projects/2nd-brain-docker/compose.yaml run --rm brain-pdf parse-mineru  <pdf>
+  docker compose -f ~/projects/2nd-brain-docker/compose.yaml run --rm brain-pdf diff <docling.md> <mineru.md>
+  ```
+  (정확한 명령 형식은 P1.3 stack 설계 후 확정.)
+- **§8 vault SSOT** — vault 콘텐츠 (knowledge·sources) 가 단일 권위 원본. 스킬은 *읽거나 쓸 수 있지만* vault 의 의미 구조를 자기 안에 중복 정의하지 않는다. CLAUDE.md 의 PARA 분류·파일명 규칙·동반 노트 frontmatter 표준을 그대로 따른다.
+
+### 예외 — L1 §3 (stdout 규칙)
+
+본 스킬은 L1 §3 (빈 stdout → 침묵, 텍스트 → 글자 단위 forward) 을 따르지 않는다.
+
+**이유**: 본 스킬은 *Claude 의 인터랙티브 절차* 다 — Dr. Ben 과 분류 제안·승인을 대화로 주고받는다. OpenClaw 의 stdout 침묵 규칙은 agent forwarding 모델 (run.py 가 결정 로직, agent 는 통로) 을 전제하나, 본 스킬은 Claude 자신이 결정·대화·승인을 수행. 따라서 Claude 는 PROGRESS.md §Spec·§Plan 의 절차에 따라 능동적으로 사용자와 대화한다.
+
+**대신 유지하는 결정성**: 핵심 파싱·diff·이동 *연산* 은 Bash 로 호출한 컨테이너 entrypoint 에 위임 (run.py 의 역할에 해당). Claude 의 reasoning 자유도는 분류 *제안*·시각 *검증*·승인 *대화* 에 한정한다. 표 수치·파일 이동·노트 작성의 결정성은 컨테이너 측 코드가 보장.
+
+### 예외 — L1 §6 (영속 상태 위치)
+
+상태 저장이 필요하면 `~/.openclaw/agents/main/memory/` 대신 `~/.claude/skills/brainify-inbox/state/processed.jsonl` 사용 (Claude Code 의 메모리 layer 가 아님). git 미추적, 머신별 독립. 자세한 형식은 P3.4 에서 결정.
+
+### N/A — L1 §7 (자격증명)
+
+외부 API 사용 ✗ → 자격증명 없음.
+
+## 호출 패턴
+
+Dr. Ben 의 트리거 (자연어 또는 슬래시):
+
+| 사용자 입력 | 절차 분기 |
+|---|---|
+| "인박스 브레인화", "PDF 정리해줘", "오늘 들어온 자료 처리", "/brainify-inbox" | 전체 절차 (스캔 → 듀얼 파싱 → 시각 검증 → 분류 제안 → 승인 → 이동·노트 생성) |
+| "/brainify-inbox status" | `00_inbox/` 의 현재 파일 목록과 처리 이력만 보고, 변경 ✗ |
+| "이거 [파일명] 만 브레인화" | 단일 PDF 만 처리 (배치 ✗) |
+
+`design-only` 단계에서는 *어느 트리거든* 미구현 보고 + PROGRESS.md §Tasks 현재 상태 안내 후 종료.
+
+## 절차 (구현 완료 후)
+
+> Phase 0 (현재) 에서는 아래 절차가 실행되지 않는다. `status: design-only` 제거 후 활성.
+
+### 0. 전제 확인
+
+- `~/projects/2nd-brain-vault/sources/00_inbox/` 존재 + PDF 1건 이상.
+- `docker compose -f ~/projects/2nd-brain-docker/compose.yaml ps` 으로 brain-pdf 서비스 사용 가능 확인.
+- 전제 미충족 시 명시적 메시지 (어느 전제가 미충족인지) 후 종료.
+
+### 1. inbox 스캔
+
+- `ls ~/projects/2nd-brain-vault/sources/00_inbox/*.pdf` 로 PDF 목록 + 파일 크기·mtime 수집.
+- 0건이면 "처리할 PDF 없음" 보고 후 종료.
+- 1건 이상이면 처리 계획 (몇 건·예상 소요) Dr. Ben 에게 보고.
+
+### 2. 듀얼 파싱 (각 PDF)
+
+각 PDF 에 대해 병렬 또는 순차로:
+
+```bash
+docker compose -f ~/projects/2nd-brain-docker/compose.yaml run --rm brain-pdf parse-docling <pdf>  > <pdf>.docling.json
+docker compose -f ~/projects/2nd-brain-docker/compose.yaml run --rm brain-pdf parse-mineru  <pdf>  > <pdf>.mineru.json
+docker compose -f ~/projects/2nd-brain-docker/compose.yaml run --rm brain-pdf diff <pdf>.docling.json <pdf>.mineru.json  > <pdf>.diff.json
+```
+
+(정확한 호출 형식·임시 파일 경로는 P1.3·P2.x 에서 확정.)
+
+### 3. Diff 검증
+
+각 PDF 의 `diff.json` 을 Read 로 읽어:
+
+- **일치 (임계값 이내)** → 두 엔진 중 하나 (Docling 우선) 의 출력을 채택. 시각 검증 생략.
+- **불일치 (임계값 초과)** → 차이 발생 페이지 번호 추출. Claude 가 원본 PDF 의 해당 페이지를 Read 도구로 시각 해석. 두 출력 중 *어느 쪽이 원본에 더 부합하는지* + *왜* 를 1줄 사유로 결정. 사유는 동반 노트 본문에 기록.
+
+### 4. 중복·연결 검사 (CLAUDE.md §0)
+
+각 PDF 의 추출 메타 (제목·저자·날짜·핵심 키워드) 로:
+
+```bash
+grep -ril "<핵심 키워드>" ~/projects/2nd-brain-vault/knowledge/
+```
+
+히트 3~5개만 Read 로 확인. 유사·관련 노트 발견 시 분류 제안 시 `[[wikilink]]` 후보로 제시. 모호 시 "이거 이미 있지 않나요?" Dr. Ben 에게 확인.
+
+### 5. PARA 분류·파일명·동반 노트 제안
+
+각 PDF 에 대해 표 형식으로 제안:
+
+| 원본 | 제안 분류 | 제안 파일명 | 동반 노트 요약 | 관련 노트 후보 |
+
+CLAUDE.md 의 파일명 규칙 (`YYYY-MM-DD_출처_내용.ext` 이벤트 / `저자_연도_주제.ext` 학술) 준수.
+
+### 6. Dr. Ben 일괄 승인
+
+"이대로 진행해도 될까요?" — 같은 출처·유사 형식은 패턴 승인. 새 출처·이질적 자료는 개별 승인. Dr. Ben 이 분류·파일명·노트 내용 수정 요청 시 즉시 반영.
+
+### 7. 이동·노트 생성
+
+승인 받은 PDF 별로 순차:
+
+1. `mv ~/projects/2nd-brain-vault/sources/00_inbox/<원파일> ~/projects/2nd-brain-vault/sources/0X_.../<새이름>`
+2. `~/projects/2nd-brain-vault/knowledge/0X_.../<새이름>.md` 작성:
+   - frontmatter (CLAUDE.md 표준 — `title`·`source`·`date`·`tags`·`sources:` 상대경로)
+   - 본문 첫 줄: `[원본 PDF](sources/0X_.../<새이름>.ext)`
+   - 한 줄 요약 / 핵심 내용 / 내 생각 / `[[관련 노트]]` 링크
+   - 듀얼 파싱 채택 엔진 + 사유 (불일치 시) 기록
+3. 실패 시 즉시 중단·보고 (이미 이동된 파일은 그대로 두고 어디서 멈췄는지 명시).
+
+### 8. 마무리
+
+- `00_inbox` 비어짐 확인 (`ls`).
+- 처리 이력 `state/processed.jsonl` 에 append (SHA·원본 경로·정착 경로·diff 채택 사유).
+- 요약 보고 (처리 건수·소요 시간·시각 검증 발생 건수).
+
+## Acceptance examples
+
+(spec-driven 의 핵심 — 구현 전에 명시. 실제 검증은 Phase 4 에서.)
+
+### 예시 1 — 0건 회차
+
+**입력**: `00_inbox/` 비어 있음. 사용자 "인박스 브레인화"
+**기대 출력**: "처리할 PDF 없음. `00_inbox/` 가 비어 있습니다." 후 종료.
+
+### 예시 2 — 정상 1건 (의학논문, 영문)
+
+**입력**: `00_inbox/Kim_2024.pdf` 1건. 사용자 "/brainify-inbox"
+**기대 절차**:
+1. 처리 계획 보고 ("1건 처리 예정, 예상 ~30초")
+2. 듀얼 파싱 → diff 임계값 이내 → Docling 채택
+3. 중복 검사 → `[[Lee_2023]]` 유사 후보 발견
+4. 제안: `sources/03_resources/PET/Kim_2024.pdf` + 동반 노트
+5. 승인 후 이동·노트 생성 → 완료 보고
+
+### 예시 3 — diff 발생 (회계보고서, 한글 표)
+
+**입력**: `00_inbox/2026-04-21_karp_영수증.pdf`
+**기대 절차**: §3 에서 표 수치 diff 발생 → Claude Read 도구로 영수증 페이지 시각 해석 → MinerU 채택 (한글 표 정확) + 사유 "MinerU 가 금액 컬럼 정렬 정확, Docling 은 1행 오정렬" → 동반 노트에 사유 기록.
+
+### 예시 4 — 미구현 단계 호출 (현재)
+
+**입력**: 사용자 "/brainify-inbox" (Phase 0~1 미완료 상태)
+**기대 출력**: "본 스킬은 현재 `status: design-only` 입니다. PROGRESS.md §Tasks 의 현재 진행 상태: Phase 0 P0.2 진행 중. 구현 완료 전 호출 불가." 후 종료.
+
+## Manual test commands
+
+```bash
+# 컨테이너 빌드 확인
+docker compose -f ~/projects/2nd-brain-docker/compose.yaml build brain-pdf
+
+# 단일 PDF 파싱 (Docling)
+docker compose -f ~/projects/2nd-brain-docker/compose.yaml run --rm brain-pdf parse-docling /vault/sources/00_inbox/sample.pdf
+
+# 단일 PDF 파싱 (MinerU)
+docker compose -f ~/projects/2nd-brain-docker/compose.yaml run --rm brain-pdf parse-mineru  /vault/sources/00_inbox/sample.pdf
+
+# Diff (두 파싱 결과)
+docker compose -f ~/projects/2nd-brain-docker/compose.yaml run --rm brain-pdf diff /tmp/a.docling.json /tmp/a.mineru.json
+
+# Offline 검증 (네트워크 차단)
+docker compose -f ~/projects/2nd-brain-docker/compose.yaml run --rm --network none brain-pdf parse-docling /vault/sources/00_inbox/sample.pdf
+```
+
+(정확한 마운트 경로·서비스명·인자 형식은 P1.3 에서 확정.)
+
+## 외부 의존
+
+- **Docker** + **2nd-brain-docker** repo (`~/projects/2nd-brain-docker/`) 의 `brain-pdf` 서비스. P1.3 에서 추가.
+- **Vault** (`~/projects/2nd-brain-vault/`) — sources·knowledge 읽기·쓰기.
+- **Docling 모델 가중치** + **MinerU 모델 가중치** — Docker volume 또는 host-mount 캐시에 영속. 첫 실행 시 1회 다운로드.
+
+## 관련 자산 포인터
+
+- `PROGRESS.md` (이 디렉토리) — mini SDD. §Spec·§Plan·§Tasks·§Checklist 권위 원본.
+- `~/projects/2nd-brain-vault/CLAUDE.md` — vault 운영 매뉴얼. PARA·파일명·frontmatter 표준 권위 원본.
+- `~/projects/2nd-brain-vault/knowledge/02_areas/brain-system/workflows/openclaw-skill-dev.md` — 스킬 dev/prod 분리 워크플로우 (Phase 5 OpenClaw 승격 시 참조).
+- `~/.openclaw/workspace/SKILL_CONTRACT.md` — OpenClaw L1 계약. 본 스킬이 재해석해 적용한 invariant 의 원본.
+- `~/projects/2nd-brain-docker/` (P1.3 에서 brain-pdf 서비스 추가될 곳).
+
+## 메타
+
+- 2026-05-13 — 최초 작성 (P0.2). PROGRESS.md (P0.1) 직후. Dr. Ben 결정 Q1=YES (mini SDD) + Q2=a (SKILL_CONTRACT 재해석 적용) + P1.1=b + P1.2=Docker 반영.
+- 작성자: Dr. Ben + Claude.
+- 수정 시: §Spec·§Plan 변경은 PROGRESS.md 가 권위 — 본 SKILL.md 는 절차 정렬만.
