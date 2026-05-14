@@ -17,10 +17,11 @@
 
 **cu126 wheel 의 CPU 환경 작동**: cu126 wheel 은 Python torch 바인딩 + 번들 CUDA `.so` 라이브러리 (~5 GB) 의 합. CPU-only 시스템에서 import 정상, `torch.cuda.is_available() == False`, 자동 CPU fallback. ~5 GB 디스크 낭비는 **의식적 trade-off** — 머신-specific 빌드 회피로 얻는 운영 단순성이 더 큼.
 
-## 노트북 사양 (2026-05-13 확인)
+## 노트북 사양 (2026-05-13 확인, hostname 2026-05-14 확정)
 
 | 항목 | 값 | 함의 |
 |---|---|---|
+| hostname | **`ai4lt`** | `kimbi` (데스크탑) 와 즉시 구분 가능 |
 | CPU | Intel Core Ultra 7 255H (Arrow Lake-H hybrid) | P+E core. PyTorch CPU inference 충분 |
 | RAM | 32 GB physical / 14 GB WSL2 | 빠듯 — 데몬 ✗, ephemeral ✅ |
 | GPU | **Intel Arc 140T** (IPEX-LLM 지원) | NVIDIA 아님 — detect 가 자동 skip |
@@ -84,14 +85,21 @@ make run-brain-pdf ARGS="brain-pdf --version"   # → 0.2.0
 
 ### 6. 성능 측정 (PROGRESS.md 누적용)
 
-데스크탑 vs 노트북 성능 차이 확인:
+데스크탑 vs 노트북 성능 차이 — **2026-05-14 노트북 (ai4lt) 실측 반영**:
 
-```bash
-# parse-docling: 데스크탑 ~8초 / 노트북 ~20-40초 예상
-# parse-mineru:  데스크탑 ~30초 / 노트북 ~80-150초 예상
-```
+| 명령 | 데스크탑 (kimbi GPU) | **노트북 (ai4lt CPU) 실측** | 자료 |
+|---|---|---|---|
+| parse-docling | ~8 s | **22.1 s** (2 pages) / **36.8 s** (3 pages) | 한국원자력의학원 자료 |
+| parse-mineru | ~30 s | **47.2 s** (2 pages) / **51.1 s** (3 pages) | 동상 |
+| diff | <1 s | 1.3 s | — |
 
-측정값을 `PROGRESS.md` P1.4 또는 P3.1 Notes 에 노트북 hostname 명시해 누적.
+LAPTOP-SETUP 초기 추정 (parse-mineru `~80-150 s`) 은 **과대 추정**. 실측 47-51 s 가 정확. parse-docling 추정 (`~20-40 s`) 은 적중. 측정값을 `PROGRESS.md` P1.4 / P1.5 Notes 에 hostname 명시해 누적.
+
+### MinerU formula recognition 운영 메모
+
+- **2026-05-14 오전** (cu126.b 시점, mineru extras 미핀): 노트북 CPU 모드에서 `mineru -f true` (default) 가 MFR (Math Formula Recognition, UnimerSwin) 모델 init 단계의 multiprocessing.spawn deadlock 으로 7+ 분 hang. fast_api `processing_tasks=1` 인 채 무한 대기. fallback 절차: `mineru -p ... -b pipeline -l korean -f false -t true --image-analysis false`. 회계 자료처럼 수식 없으면 충분.
+- **2026-05-14 오후** (cu126.d 시점, mineru[pipeline,vlm] 핀 적용 후): 같은 PDF 가 default opts (`-f true`) 로 47.2 s 정상 완료. **운영 제약 일단 해제**. 가설 (vlm extras 의 init 순서 / cu126 wheel 의 thread-local state / multiprocessing race 변동) 검증 ✗ — 회귀 가능성 모니터링.
+- **재발 시**: 위 fallback 명령으로 우회. entrypoint.py 의 `parse_mineru()` 수정 (formula opt 노출) 은 별도 작업.
 
 ## 우려사항·체크 포인트
 
@@ -130,5 +138,6 @@ BRAIN_PDF_FORCE_VARIANT=cpu make run-brain-pdf ...
 
 - 2026-05-13 — 최초 작성. 데스크탑 kimbi P1.4 마감 시점. 옵션 1 (같은 이미지) / 옵션 2 (CPU build arg toggle) 분기 제시.
 - 2026-05-14 — **어댑터 아키텍처로 전면 갱신**. `scripts/detect-compose.sh` + Makefile auto-detect 도입. 옵션 1/2 분기 폐기 — 단일 절차로 양 PC 공통 셋업. cu126 wheel 의 CPU 환경 작동 / PyTorch runtime adapter / Docker GPU 노출 분리 의 3 층 어댑터 패턴 명문화. 이로써 git push 가 데스크탑·노트북 양쪽에 안전.
+- 2026-05-14 (오후) — **노트북 ai4lt 실측 반영**. hostname 확정 (`ai4lt`). Step 6 의 추정값 정정 (parse-mineru `80-150 s` → 실측 `47-51 s`). MinerU formula deadlock 운영 메모 추가 — 오전 발견·오후 해소·재발 시 fallback 명시. 노트북측 vault 인계 README 의 데이터 통합.
 - 작성자: Dr. Ben + Claude.
 - 수정 시: 노트북에서 실제 셋업 통과 후 단계별 시간·이슈 누적. 어댑터 패턴 위반하는 변경 ✗ (예: Dockerfile cu126 hardcode 제거, machine-specific build arg 등).

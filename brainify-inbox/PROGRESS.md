@@ -124,6 +124,7 @@ Dr. Ben 이 "brainify-inbox 재개" 또는 "PDF 파싱 스킬 진행" 류 지시
   - **2026-05-13 완료**. 회계 자료 (`한국원자력의학원_수입지출+현황.pdf`) 로 검증.
   - **첫 실행** 57초 *(kimbi GPU)* (HF 모델 ~500 MB 다운로드 + GPU 모델 로드 + 파싱). **두 번째 실행** 10초 *(kimbi GPU)* — 5.7× 가속 (캐시 hit 증명).
   - **`--network none` 엄밀 검증**: 9.4초 *(kimbi GPU)*, 출력 bit-identical (83 lines, 10080 bytes), curl=000 (네트워크 진짜 차단됨). True offline 확인.
+  - **노트북 (ai4lt) CPU 실측** (2026-05-14, vault README 인계): parse-docling 22.1 s *(ai4lt CPU)* — 추정 20-40초 적중. parse-docling 36.8 s on 3 pages PDF *(ai4lt CPU, 임직원수 자료)*. cu126 wheel 단일 이미지로 양 PC 작동 검증됨.
   - 모델 캐시: `2nd-brain-docker_brain-pdf-models` Docker named volume, 506 MB. 마운트 경로 `/home/user/.cache/huggingface/`. 재빌드 시에도 영속.
   - **빌드 정정 1회** (P1.4 도중 발견): docling 의 OCR 엔진 RapidOCR 이 site-packages 안에 모델을 쓰려다 PermissionError → Dockerfile 의 build 시점 (root) 에 `python3 -c "from rapidocr import RapidOCR; RapidOCR()"` 실행해 모델 사전 다운로드. 이미지 태그 `cu126` → `cu126.b` 로 bump.
   - **출력 품질**: 한국어 회계 표 — 6년 × 항목별 컬럼 정렬, 빈 셀 (`-`) 정확, 천 단위 콤마 보존 (54,250 / 56,655 등), 메타정보 (담당자·전화번호) 표로 인식. Docling 단독으로도 회계 자료 파싱 품질 매우 우수.
@@ -139,6 +140,7 @@ Dr. Ben 이 "brainify-inbox 재개" 또는 "PDF 파싱 스킬 진행" 류 지시
     - 1회차 (모델 다운로드 + 로드 + 파싱): **49.7초** *(kimbi GPU)*
     - 2회차 (캐시 hit): **30.7초** *(kimbi GPU)* — 1.6× 가속 (docling 의 5.7× 보다 낮음, 이유: pipeline 백엔드가 매 호출마다 FastAPI model server 를 spawn → init 비용 매번 발생. weight 캐시는 hit. P2.1/P2.2 에서 daemon 모드 검토 가능)
     - 3회차 offline (`--network none` + raw `docker run`): **27.6초** *(kimbi GPU)* — 캐시 hit 와 유사. 출력 bit-identical (31 lines / 12638 bytes 동일). curl=000 (네트워크 진짜 차단됨). **True offline 확인**.
+  - **노트북 (ai4lt) CPU 실측** (2026-05-14, vault README 인계): parse-mineru **47.2 s** *(ai4lt CPU, 한국원자력의학원_수입지출+현황 2 pages)* — LAPTOP-SETUP.md 의 추정 80-150 초 **과대 추정** 으로 확인. 3 페이지 자료 (임직원수) 는 **51.1 s** *(ai4lt CPU)*. **MinerU formula recognition deadlock 재발 안 됨** — 어제 오전엔 노트북 CPU 모드에서 `-f true` (default) 가 MFR UnimerSwin spawn deadlock 으로 7+ 분 hang 했으나, 오후 (mineru[pipeline,vlm] 핀 적용 후) 같은 PDF 가 default opts 로 47.2 s 정상 완료. 가설 3건 (vlm extras 의 init 순서 변화 / cu126 wheel 의 thread-local state / multiprocessing race 변동) 검증 ✗. **운영 제약 일단 해제, 회귀 가능성은 모니터링**. 재발 시 `mineru -f false -t true --image-analysis false` fallback 가능.
   - **CLI 형식**: `mineru -p <pdf> -o <output_dir> -b pipeline -l korean`. 백엔드 4종 중 `pipeline` 채택 — 한국어 회계 PDF 표 인식·OCR 품질 양호. `vlm-auto-engine`/`hybrid-auto-engine` 은 미검증 (Qwen-VL 모델 추가 다운로드 17 GB+ 필요, Phase 1 범위 외).
   - **출력 구성**: `<pdf-stem>/auto/` 아래 `<stem>.md`, `<stem>_content_list.json`, `<stem>_content_list_v2.json`, `<stem>_middle.json`, `<stem>_model.json`, `<stem>_layout.pdf`, `<stem>_span.pdf`, `<stem>_origin.pdf`, `images/*.jpg` (cropped figures). docling 의 단일 .md 출력 대비 정보량 풍부.
   - **출력 품질 (docling 과 비교)**: 둘 다 수치·천단위 콤마 정확. 형식 다름 — docling 은 pipe-markdown 표 (rowspan 을 값 중복으로 평면화: `수입|수입|수입|수입`), MinerU 는 HTML 표 + rowspan/colspan 속성으로 구조 보존. 인간 가독성 docling↑, 구조 충실도 MinerU↑. docling 에 OCR 띄어쓰기 artifact 1건 (`정부순지 원.pdf`). 섹션 순서 차이: docling 은 "## 35. 수입·지출 현황" 이 중간, mineru 는 상단. → **P2.3 diff 모듈에서 두 포맷 정규화 (셀 단위 추출) 필요**.
@@ -199,6 +201,7 @@ Dr. Ben 이 "brainify-inbox 재개" 또는 "PDF 파싱 스킬 진행" 류 지시
   - **Phase 2 일괄 image rebuild** *(kimbi)*: `2026.05.13.cu126.d` → `2026.05.14`. requirements.txt/Dockerfile 변경 ✗ (entrypoint.py 만), 따라서 Docker layer 캐시 hit — **4초** 만에 rebuild 완료. dev iteration 패턴 (volume-mount) 의 절약분 = 14분 (P2.1/P2.2 두 번의 7분 빌드 회피). 노트북도 entrypoint.py 만 변경 시 같은 캐시 hit 패턴 적용 가능.
   - **호출 형식**: `docker compose run --rm brain-pdf brain-pdf <subcmd> <args>` — service 명 (brain-pdf) + binary 명 (brain-pdf) 2회. ENTRYPOINT 미설정 (compose 의 CMD `sleep infinity` 데몬 모드와 공존 위함). 다소 verbose 지만 Makefile `make run-brain-pdf ARGS="brain-pdf <subcmd> ..."` 가 운영 형식.
   - **다음**: Phase 3 — SKILL.md 절차에 따라 Claude 가 inbox 스캔 → 두 파서 호출 → diff → 분류·승인 흐름 (P3.1~P3.4). VERSION 핀 (`0.1.0-design` → 정식 버전) 도 그 때 함께.
+  - **노트북 (ai4lt) parse-docling 검증** (2026-05-14, vault README 인계): 같은 entrypoint.py 가 노트북 CPU 모드에서도 정상 작동. parse-docling 22.1 s *(ai4lt CPU)* / 36.8 s *(ai4lt CPU, 3 pages)*. 출력 JSON 형식·키 셋 데스크탑과 동일.
 
 ### Phase 3 — 분류·승인 흐름 (Claude 측 절차)
 
@@ -262,6 +265,7 @@ Dr. Ben 이 "brainify-inbox 재개" 또는 "PDF 파싱 스킬 진행" 류 지시
   - **회계 PDF 동반 노트**: 본문 안에 6개년 시계열 추세 표 (출연금·수입합계·지출합계·수지차) 직접 작성 — 동반 노트 자체가 핵심 데이터 anchor. **수지차 -22,268 백만원 (2025 역대 최대)** 등 주요 관찰 4건 명시.
   - **영속 이력 기록 (`state/processed.jsonl`)**: Phase 1 에서는 **skip 결정**. Vault 자체 (sources + knowledge) + git history (도입 시) 가 영속 기록. 별도 ledger 는 중복. Phase 5 에서 OpenClaw 자동 트리거 도입 시 재검토.
   - **inbox 잔여 (비-PDF·Phase 1 범위 외)**: `.md` 2건 (Gmail 캡처 — 이미 brainified 형식), `.docx` + `.md.txt` 1건 (AI 도구 리뷰), `_attachments/` 디렉토리, `경영알리오_한국원자력의학원_회계감사보고/` 디렉토리 (2021~2025 회계자료 일괄 — 후속 처리 대상).
+  - **노트북 SKILL.md 전 절차 통과** (2026-05-14, vault README 인계): `한국원자력의학원_임직원+수.pdf` (98 KB, 3 pages) 로 노트북 (ai4lt CPU) 에서 §0~§8 모든 단계 통과. diff verdict=diverge (heading_overlap=0.4, numeric_cell_match=0.713) → 시각 검증 후 **Docling 채택** (heading 3개 정확 + markdown 표 형식). 정착: `sources/02_areas/한국원자력의학원/경영공시/2026-04-13_KIRAMS_2025임직원수.pdf` + 동반 노트. 데스크탑이 처리한 `수입지출현황` 과 같은 시리즈·파일명 컨벤션 일관 유지. **양 PC 모두 같은 skill·이미지·절차로 end-to-end 작동 검증됨**.
   - **Dr. Ben 사후 검토 포인트** (사용자가 직접 vault 보고 결정):
     - `2025_추계학술대회`·`2025_춘계학술대회` 폴더명이 기존 `2026_춘계학술대회` 와 패턴 동일 → 좋음
     - 회계 PDF 위치 `경영공시/` 가 자연스러운지, 아니면 `회계/` 또는 더 세분 (`연간공시/` 등)
@@ -305,5 +309,6 @@ Dr. Ben 이 "brainify-inbox 재개" 또는 "PDF 파싱 스킬 진행" 류 지시
 - 2026-05-13 — 최초 작성. webmail-watch/PROGRESS.md 의 spec-kit 압축 거버넌스를 Claude Code 스킬에 첫 적용. Dr. Ben 결정 Q1=YES (mini SDD 채택) + Q2=(a) (OpenClaw SKILL_CONTRACT 재해석으로 적용) 직후.
 - 2026-05-14 — **Phase 1~3 마감**. P1.1~P1.5 (인프라·Docker·Docling·MinerU offline) + P2.1~P2.3 (parse-docling·parse-mineru·diff) + P3.1~P3.4 (실 inbox 4 PDF 처리: 학회 참석확인증 3 + 회계공시 1) 모두 통과. **brain-pdf 이미지** = `2026.05.14` (entrypoint VERSION 0.2.0). **SKILL.md** `status: design-only` → `active`. **건너뜀**: Phase 4 (실자료 검증 P4.1~P4.3) — Phase 3 이 본질적으로 실자료 검증이라 별도 단계 불필요 (P4 는 Phase 1 의 Out of scope 자료 — 영수증·논문 — 들어올 때 ad-hoc 검증).
 - 2026-05-14 — **다중 PC 어댑터 패턴 도입** (Dr. Ben 우려 제기 후). 데스크탑 ↔ 노트북 git 동기 시 ping-pong fix cycle 차단. 핵심 결정: ① `scripts/detect-compose.sh` 가 nvidia-smi + docker info 검사 후 compose 체인 출력 (`BRAIN_PDF_FORCE_VARIANT=gpu|cpu` env override 지원). ② Makefile 의 `-gpu` suffix 타겟 제거 — 단일 `build-brain-pdf` / `run-brain-pdf` 가 detect 사용. ③ SKILL.md §2 + Manual test 의 하드코드 gpu.yml 제거. ④ LAPTOP-SETUP.md 전면 갱신 — 옵션 1/2 분기 폐기, 단일 셋업 절차. ⑤ 정책 메모리 [[no-machine-specific-in-synced-files]] 신규. 데스크탑 live 검증: auto → `cuda_available=True`, FORCE_VARIANT=cpu → `cuda_available=False` (same image, different runtime). 노트북 동기 안전 확보. **다음**: Phase 5 — 실 inbox 1주 운영 (P5.1) + OpenClaw 사이드잡 검토 (P5.2). 첫 노트북 동기 시 `LAPTOP-SETUP.md` 의 4 단계만 실행.
+- 2026-05-14 (오후, 데스크탑 통합) — **노트북 (ai4lt) 인계 통합**. 데스크탑 push (`8fae229` docker + `bb83f7a` skills) 후 노트북이 vault 안 `knowledge/02_areas/brain-system/tools/2nd-brain-docker/brain-pdf/README.md` 로 인계 (실측 데이터·formula deadlock 해소·임직원수 PDF 정착·patch 파일 보존). 데스크탑이 본 README 를 읽어 P1.4·P1.5·P3.4 Notes 에 노트북 CPU 실측·SKILL.md 전 절차 통과·formula 재발 모니터링 메모 통합. 메모리 [[multi-pc-claude-code-handoff]] 신규 — 노트북=vault README 인계, 데스크탑=동기 자산 정본 갱신+push 분업 규칙 명문화. 메모리 [[user-machines-spec]] 갱신 (노트북 hostname `ai4lt` 확정).
 - 작성자: Dr. Ben + Claude.
 - 수정 시: §Spec·§Plan 변경은 Dr. Ben 승인 후. §Tasks 항목 추가/삭제도 동일. 모델은 진행 중 항목의 Done when 정밀화·Notes 누적만 자율. **성능 수치·환경 의존 측정 Notes 추가 시 측정 PC 를 inline 명시** (예: `*(kimbi GPU)*`, `*(노트북 <hostname> CPU)*`) — 양 PC 측정값을 같은 행에 누적할 때 비교 기준 보존.
