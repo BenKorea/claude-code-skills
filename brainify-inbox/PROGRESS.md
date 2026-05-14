@@ -116,14 +116,14 @@ Dr. Ben 이 "brainify-inbox 재개" 또는 "PDF 파싱 스킬 진행" 류 지시
     - `compose.brain-pdf.gpu.yml` (신규, GPU 액세스 옵션 — 데스크탑 kimbi 전용)
     - `Makefile` (편집, 8개 타겟: build/up/down/shell/run + gpu variants)
     - `.env.example` (편집, `BRAIN_PDF_VERSION` 항목)
-  - **GPU 통합 (예상보다 한 단계 더)**: WSL2 의 RTX 3060 을 컨테이너에서 사용 가능하게 만들기 위해 nvidia-container-toolkit 설치 (Dr. Ben 직접 sudo 실행) + Docker daemon 의 nvidia runtime 등록 (`nvidia-ctk runtime configure`). 검증: `docker run --gpus all nvidia/cuda:12.0.0-base nvidia-smi` ✅, brain-pdf 컨테이너 안 nvidia-smi ✅, torch.cuda.is_available()=True ✅, GPU matmul 실연산 통과.
+  - **GPU 통합 (kimbi 데스크탑 1회 호스트 셋업, 노트북은 불필요)**: WSL2 의 RTX 3060 을 컨테이너에서 사용 가능하게 만들기 위해 nvidia-container-toolkit 설치 (Dr. Ben 직접 sudo 실행) + Docker daemon 의 nvidia runtime 등록 (`nvidia-ctk runtime configure`). 검증: `docker run --gpus all nvidia/cuda:12.0.0-base nvidia-smi` ✅, brain-pdf 컨테이너 안 nvidia-smi ✅, torch.cuda.is_available()=True ✅, GPU matmul 실연산 통과.
   - **빌드 정정 1회**: 초기 빌드 (2026.05.13 태그) 가 cu130 wheel 받아 driver 12.6 과 불일치 → CUDA available False. Dockerfile 의 `pip install` 인덱스를 `cu126` 으로 변경 + 단일 install 로 consolidate 후 재빌드 (2026.05.13.cu126 태그) — 통과. broken 이미지 디스크 정리됨.
   - **최종 이미지**: `2nd-brain/brain-pdf:2026.05.13.cu126`, 12.3 GB. torch 2.12.0+cu126, docling 2.93.0, mineru 3.1.12.
   - **메모리 학습**: kimbi 는 데스크탑 (이전 메모리 잘못 — `user_machines_spec.md` 로 정정). 데스크탑·노트북 비대칭 인지.
 - [x] **P1.4 Docling 설치 + 모델 1회 다운로드 + offline 작동 확인** · Owner: model · Depends on: P1.3 · Done when: 컨테이너 안에서 `docling sample.pdf` 통과 + 모델 캐시 영속 + 네트워크 차단 상태 작동. Notes:
   - **2026-05-13 완료**. 회계 자료 (`한국원자력의학원_수입지출+현황.pdf`) 로 검증.
-  - **첫 실행** 57초 (HF 모델 ~500 MB 다운로드 + GPU 모델 로드 + 파싱). **두 번째 실행** 10초 — 5.7× 가속 (캐시 hit 증명).
-  - **`--network none` 엄밀 검증**: 9.4초, 출력 bit-identical (83 lines, 10080 bytes), curl=000 (네트워크 진짜 차단됨). True offline 확인.
+  - **첫 실행** 57초 *(kimbi GPU)* (HF 모델 ~500 MB 다운로드 + GPU 모델 로드 + 파싱). **두 번째 실행** 10초 *(kimbi GPU)* — 5.7× 가속 (캐시 hit 증명).
+  - **`--network none` 엄밀 검증**: 9.4초 *(kimbi GPU)*, 출력 bit-identical (83 lines, 10080 bytes), curl=000 (네트워크 진짜 차단됨). True offline 확인.
   - 모델 캐시: `2nd-brain-docker_brain-pdf-models` Docker named volume, 506 MB. 마운트 경로 `/home/user/.cache/huggingface/`. 재빌드 시에도 영속.
   - **빌드 정정 1회** (P1.4 도중 발견): docling 의 OCR 엔진 RapidOCR 이 site-packages 안에 모델을 쓰려다 PermissionError → Dockerfile 의 build 시점 (root) 에 `python3 -c "from rapidocr import RapidOCR; RapidOCR()"` 실행해 모델 사전 다운로드. 이미지 태그 `cu126` → `cu126.b` 로 bump.
   - **출력 품질**: 한국어 회계 표 — 6년 × 항목별 컬럼 정렬, 빈 셀 (`-`) 정확, 천 단위 콤마 보존 (54,250 / 56,655 등), 메타정보 (담당자·전화번호) 표로 인식. Docling 단독으로도 회계 자료 파싱 품질 매우 우수.
@@ -133,12 +133,12 @@ Dr. Ben 이 "brainify-inbox 재개" 또는 "PDF 파싱 스킬 진행" 류 지시
   - **빌드 정정 2회 (cu126.b → cu126.c → cu126.d)**:
     - 첫 시도: pipeline backend → `ImportError: find_pruneable_heads_and_indices` (transformers v5 에서 제거). 그 다음 시도: vlm-auto-engine → `AttributeError: Qwen2VLConfig.max_position_embeddings` — 같은 v5 breaking change 패턴. 조사 결과 transformers 5.8.1 설치됨, mineru·docling 양쪽 다 `<5.0.0` 요구 (mineru 는 `>=4.57.3,<5.0.0` 명시). 그러나 mineru 의 transformers 핀은 `extras_require` (`[pipeline]`/`[vlm]`) 안에 있어 unpinned `mineru` 설치 시 미반영. pip resolver drift.
     - **정정 1 (cu126.c)**: `requirements.txt` 에 `transformers>=4.57.3,<5.0.0` 명시 핀 추가. transformers 4.57.6 으로 설치됨. pipeline 백엔드 재시도 → `ModuleNotFoundError: albumentations` — 다른 누락 dep (역시 `[pipeline]` extra 에 묶임).
-    - **정정 2 (cu126.d)**: `mineru` → `mineru[pipeline,vlm]` 로 교체. 누락 deps (albumentations, albucore, ftfy, opencv-python-headless, simsimd, stringzilla, wcwidth) 자동 포함. **docling 회귀 검증 통과** (8.9초, 출력 정상).
+    - **정정 2 (cu126.d)**: `mineru` → `mineru[pipeline,vlm]` 로 교체. 누락 deps (albumentations, albucore, ftfy, opencv-python-headless, simsimd, stringzilla, wcwidth) 자동 포함. **docling 회귀 검증 통과** (8.9초 *(kimbi GPU)*, 출력 정상).
   - **최종 이미지**: `2nd-brain/brain-pdf:2026.05.13.cu126.d`. transformers 4.57.6, torch 2.12.0+cu126, docling 2.93.0, mineru 3.1.12. HF 캐시 3.5 GB → 3.9 GB (mineru 의 layout/table/OCR 모델 ~400 MB 추가).
   - **실행 성능**:
-    - 1회차 (모델 다운로드 + 로드 + 파싱): **49.7초**
-    - 2회차 (캐시 hit): **30.7초** — 1.6× 가속 (docling 의 5.7× 보다 낮음, 이유: pipeline 백엔드가 매 호출마다 FastAPI model server 를 spawn → init 비용 매번 발생. weight 캐시는 hit. P2.1/P2.2 에서 daemon 모드 검토 가능)
-    - 3회차 offline (`--network none` + raw `docker run`): **27.6초** — 캐시 hit 와 유사. 출력 bit-identical (31 lines / 12638 bytes 동일). curl=000 (네트워크 진짜 차단됨). **True offline 확인**.
+    - 1회차 (모델 다운로드 + 로드 + 파싱): **49.7초** *(kimbi GPU)*
+    - 2회차 (캐시 hit): **30.7초** *(kimbi GPU)* — 1.6× 가속 (docling 의 5.7× 보다 낮음, 이유: pipeline 백엔드가 매 호출마다 FastAPI model server 를 spawn → init 비용 매번 발생. weight 캐시는 hit. P2.1/P2.2 에서 daemon 모드 검토 가능)
+    - 3회차 offline (`--network none` + raw `docker run`): **27.6초** *(kimbi GPU)* — 캐시 hit 와 유사. 출력 bit-identical (31 lines / 12638 bytes 동일). curl=000 (네트워크 진짜 차단됨). **True offline 확인**.
   - **CLI 형식**: `mineru -p <pdf> -o <output_dir> -b pipeline -l korean`. 백엔드 4종 중 `pipeline` 채택 — 한국어 회계 PDF 표 인식·OCR 품질 양호. `vlm-auto-engine`/`hybrid-auto-engine` 은 미검증 (Qwen-VL 모델 추가 다운로드 17 GB+ 필요, Phase 1 범위 외).
   - **출력 구성**: `<pdf-stem>/auto/` 아래 `<stem>.md`, `<stem>_content_list.json`, `<stem>_content_list_v2.json`, `<stem>_middle.json`, `<stem>_model.json`, `<stem>_layout.pdf`, `<stem>_span.pdf`, `<stem>_origin.pdf`, `images/*.jpg` (cropped figures). docling 의 단일 .md 출력 대비 정보량 풍부.
   - **출력 품질 (docling 과 비교)**: 둘 다 수치·천단위 콤마 정확. 형식 다름 — docling 은 pipe-markdown 표 (rowspan 을 값 중복으로 평면화: `수입|수입|수입|수입`), MinerU 는 HTML 표 + rowspan/colspan 속성으로 구조 보존. 인간 가독성 docling↑, 구조 충실도 MinerU↑. docling 에 OCR 띄어쓰기 artifact 1건 (`정부순지 원.pdf`). 섹션 순서 차이: docling 은 "## 35. 수입·지출 현황" 이 중간, mineru 는 상단. → **P2.3 diff 모듈에서 두 포맷 정규화 (셀 단위 추출) 필요**.
@@ -150,7 +150,7 @@ Dr. Ben 이 "brainify-inbox 재개" 또는 "PDF 파싱 스킬 진행" 류 지시
   - **2026-05-14 완료**. `images/brain-pdf/entrypoint.py` 의 `parse_docling()` stub 을 실제 구현으로 교체.
   - **구현 요지**: `DocumentConverter().convert(pdf_path)` → `result.document` 에서 `export_to_markdown()`, `export_to_doctags()`, `export_to_dict()` 호출. `runtime_sec` 는 converter init + convert 전체 wall time (cold-start 한 번에 호출되는 ephemeral 모드 기본 가정. daemon 모드 도입 시 재정의).
   - **stdout 오염 방지**: docling/rapidocr 가 print/logging 으로 INFO 메시지를 stdout 에 흘리는 것을 `contextlib.redirect_stdout(sys.stderr)` 로 잡음. stdout 는 마지막 `json.dumps(...)` 결과만 — P2.3 diff 모듈이 안심하고 파이프 가능. import 자체도 함수 내부로 두어 `--version`/`--help` 가 docling 로드 비용 (3 s+) 을 안 냄.
-  - **검증** (한국원자력의학원 회계 PDF, 컨테이너 캐시 warm):
+  - **검증** *(kimbi GPU, 한국원자력의학원 회계 PDF, 컨테이너 캐시 warm)*:
     - 출력: 441,655 bytes valid JSON. 키 = {engine, pdf_path, pages, runtime_sec, markdown, doctags, json_structure}.
     - pages=2, runtime_sec=4.6s (캐시 warm), markdown=10,489 B, doctags=5,757 B.
     - `json_structure` 키 = schema_name, version, name, origin, furniture, body, groups, texts, pictures, tables → docling 의 full DoclingDocument 구조 그대로.
@@ -165,7 +165,7 @@ Dr. Ben 이 "brainify-inbox 재개" 또는 "PDF 파싱 스킬 진행" 류 지시
     2. `json_structure = middle.json` — content_list_v2.json (flat reading-order list) 도 있지만 middle.json 이 페이지별 블록·bbox·타입을 가진 가장 풍부한 구조. docling 의 export_to_dict() 와 의미적으로 가장 근접. 단 키 셋은 다름 (mineru = {pdf_info, _backend, _version_name} vs docling = {schema_name, version, name, origin, furniture, body, groups, texts, pictures, tables}).
     3. `pages = len(middle["pdf_info"])` — 페이지별 블록 리스트의 길이. KeyError 시 fail-loud (schema 변경 감지). fallback 0 으로 mask 하지 않음.
   - **stdout 오염 차단**: subprocess 의 stdout·stderr 양쪽 다 캡처 → `sys.stderr.write(proc.stdout)` + `sys.stderr.write(proc.stderr)` 로 흘려보냄. mineru 의 진행바·FastAPI INFO 가 우리 stdout 을 침범 못함.
-  - **검증** (한국원자력의학원 회계 PDF, 컨테이너 캐시 warm):
+  - **검증** *(kimbi GPU, 한국원자력의학원 회계 PDF, 컨테이너 캐시 warm)*:
     - 출력: 73,166 B valid JSON. 키 = {engine, pdf_path, pages, runtime_sec, markdown, doctags, json_structure}. 키 셋 docling 과 동일.
     - pages=2, runtime_sec=35.3 s (wall time 35.3 s 와 정확히 일치 — runtime 은 subprocess 전체).
     - markdown=10,591 chars (Korean 다바이트 → byte 단위로는 ~12,638 B, P1.5 의 wc 결과와 일치).
@@ -196,7 +196,7 @@ Dr. Ben 이 "brainify-inbox 재개" 또는 "PDF 파싱 스킬 진행" 류 지시
     - **메트릭**: heading_overlap=0.5, paragraph_count_delta=0.091, table_count_match=1.0, **numeric_cell_match=1.0** (108개 숫자 셀 양쪽 정확히 일치), heading_count={a:2, b:1}, table_count={a:5, b:5}.
     - **verdict=diverge** — heading_overlap 0.5 가 임계 0.8 미달. docling-only heading="수입 및 지출 현황", mineru 의 대응 heading="35. 수입·지출 현황" — 같은 섹션이지만 표기 다름. 표·숫자·문단 핵심 데이터는 완전 일치.
     - 보수적 verdict: heading 텍스트 차이만으로도 P3.2 시각 검증 강제. false-positive 가능성 있지만 운영 초반 안전한 편. P5.1 임계값 보정 시 단서로 기록.
-  - **Phase 2 일괄 image rebuild**: `2026.05.13.cu126.d` → `2026.05.14`. requirements.txt/Dockerfile 변경 ✗ (entrypoint.py 만), 따라서 Docker layer 캐시 hit — **4초** 만에 rebuild 완료. dev iteration 패턴 (volume-mount) 의 절약분 = 14분 (P2.1/P2.2 두 번의 7분 빌드 회피).
+  - **Phase 2 일괄 image rebuild** *(kimbi)*: `2026.05.13.cu126.d` → `2026.05.14`. requirements.txt/Dockerfile 변경 ✗ (entrypoint.py 만), 따라서 Docker layer 캐시 hit — **4초** 만에 rebuild 완료. dev iteration 패턴 (volume-mount) 의 절약분 = 14분 (P2.1/P2.2 두 번의 7분 빌드 회피). 노트북도 entrypoint.py 만 변경 시 같은 캐시 hit 패턴 적용 가능.
   - **호출 형식**: `docker compose run --rm brain-pdf brain-pdf <subcmd> <args>` — service 명 (brain-pdf) + binary 명 (brain-pdf) 2회. ENTRYPOINT 미설정 (compose 의 CMD `sleep infinity` 데몬 모드와 공존 위함). 다소 verbose 지만 Makefile `make run-brain-pdf ARGS="brain-pdf <subcmd> ..."` 가 운영 형식.
   - **다음**: Phase 3 — SKILL.md 절차에 따라 Claude 가 inbox 스캔 → 두 파서 호출 → diff → 분류·승인 흐름 (P3.1~P3.4). VERSION 핀 (`0.1.0-design` → 정식 버전) 도 그 때 함께.
 
@@ -217,7 +217,7 @@ Dr. Ben 이 "brainify-inbox 재개" 또는 "PDF 파싱 스킬 진행" 류 지시
     2. **참석확인증 3건 패턴**: docling 은 제목을 heading (#) 으로 추출, mineru 는 paragraph 로. heading_count={a:1, b:0} 또는 b 만 추출. 같은 양식인데 추계 1건만 mineru 가 heading 추출함 — 일관성 결여.
     3. **mineru paragraph 더 잘게 쪼갬**: 참석확인증에서 docling 6 vs mineru 9~10. 동일 텍스트 블록을 mineru 가 line-break 단위로 분할하는 경향.
     4. **회계 PDF**: 108개 숫자 셀 양 엔진 100% 일치 (P2.3 의 자세한 결과). 핵심 데이터 추출 신뢰성 확인.
-  - **총 wall time**: ~3 분 (4 PDF × ~45 초). 예상치 정확.
+  - **총 wall time** *(kimbi GPU)*: ~3 분 (4 PDF × ~45 초). 예상치 정확. 노트북 CPU 예상 ~10-15 분 (parse-mineru ~80-150 초/PDF 가정).
   - **다음**: P3.2 — diff verdict=diverge 페이지 시각 검증. 4건 모두 diverge 이므로 Read 도구로 원본 PDF 페이지 시각 해석 + 채택 엔진·사유 1줄 결정.
 - [x] **P3.2 차이 발생 페이지 시각 검증** · Owner: model · Depends on: P3.1 · Done when: diff 임계값 초과 페이지에 대해 Claude 가 Read 도구로 해당 페이지 시각 해석 → 두 엔진 중 정확한 쪽 선택 + 사유 1줄 기록. Notes:
   - **2026-05-14 완료**. 4 PDF 모두 verdict=diverge → 4건 모두 시각 검증 (Claude Code 의 Read 도구 멀티모달 PDF 직접 해석).
@@ -306,4 +306,4 @@ Dr. Ben 이 "brainify-inbox 재개" 또는 "PDF 파싱 스킬 진행" 류 지시
 - 2026-05-14 — **Phase 1~3 마감**. P1.1~P1.5 (인프라·Docker·Docling·MinerU offline) + P2.1~P2.3 (parse-docling·parse-mineru·diff) + P3.1~P3.4 (실 inbox 4 PDF 처리: 학회 참석확인증 3 + 회계공시 1) 모두 통과. **brain-pdf 이미지** = `2026.05.14` (entrypoint VERSION 0.2.0). **SKILL.md** `status: design-only` → `active`. **건너뜀**: Phase 4 (실자료 검증 P4.1~P4.3) — Phase 3 이 본질적으로 실자료 검증이라 별도 단계 불필요 (P4 는 Phase 1 의 Out of scope 자료 — 영수증·논문 — 들어올 때 ad-hoc 검증).
 - 2026-05-14 — **다중 PC 어댑터 패턴 도입** (Dr. Ben 우려 제기 후). 데스크탑 ↔ 노트북 git 동기 시 ping-pong fix cycle 차단. 핵심 결정: ① `scripts/detect-compose.sh` 가 nvidia-smi + docker info 검사 후 compose 체인 출력 (`BRAIN_PDF_FORCE_VARIANT=gpu|cpu` env override 지원). ② Makefile 의 `-gpu` suffix 타겟 제거 — 단일 `build-brain-pdf` / `run-brain-pdf` 가 detect 사용. ③ SKILL.md §2 + Manual test 의 하드코드 gpu.yml 제거. ④ LAPTOP-SETUP.md 전면 갱신 — 옵션 1/2 분기 폐기, 단일 셋업 절차. ⑤ 정책 메모리 [[no-machine-specific-in-synced-files]] 신규. 데스크탑 live 검증: auto → `cuda_available=True`, FORCE_VARIANT=cpu → `cuda_available=False` (same image, different runtime). 노트북 동기 안전 확보. **다음**: Phase 5 — 실 inbox 1주 운영 (P5.1) + OpenClaw 사이드잡 검토 (P5.2). 첫 노트북 동기 시 `LAPTOP-SETUP.md` 의 4 단계만 실행.
 - 작성자: Dr. Ben + Claude.
-- 수정 시: §Spec·§Plan 변경은 Dr. Ben 승인 후. §Tasks 항목 추가/삭제도 동일. 모델은 진행 중 항목의 Done when 정밀화·Notes 누적만 자율.
+- 수정 시: §Spec·§Plan 변경은 Dr. Ben 승인 후. §Tasks 항목 추가/삭제도 동일. 모델은 진행 중 항목의 Done when 정밀화·Notes 누적만 자율. **성능 수치·환경 의존 측정 Notes 추가 시 측정 PC 를 inline 명시** (예: `*(kimbi GPU)*`, `*(노트북 <hostname> CPU)*`) — 양 PC 측정값을 같은 행에 누적할 때 비교 기준 보존.
