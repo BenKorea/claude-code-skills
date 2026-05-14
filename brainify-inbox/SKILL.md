@@ -99,12 +99,32 @@ done
 
 성능 차이: 데스크탑 GPU = parse-mineru ~30 초, 노트북 CPU = parse-mineru ~80-150 초 예상 (Arrow Lake-H CPU 추론). 컨테이너 이미지·코드 동일, PyTorch 가 runtime 에 CUDA/CPU 백엔드 자동 선택.
 
-### 3. Diff 검증
+### 3. Diff 검증 + 정제본 (refined.md) 작성
 
 각 PDF 의 `diff.json` 을 Read 로 읽어:
 
 - **일치 (임계값 이내)** → 두 엔진 중 하나 (Docling 우선) 의 출력을 채택. 시각 검증 생략.
 - **불일치 (임계값 초과)** → 차이 발생 페이지 번호 추출. Claude 가 원본 PDF 의 해당 페이지를 Read 도구로 시각 해석. 두 출력 중 *어느 쪽이 원본에 더 부합하는지* + *왜* 를 1줄 사유로 결정. 사유는 동반 노트 본문에 기록.
+
+검증 후 **정제본 작성** — Claude 가 raw 두 markdown 의 강점만 취하고 시각 검증으로 보정한 결과를 `_parse/refined.md` 에 작성:
+
+```yaml
+---
+source_pdf: sources/<PARA>/<새stem>.pdf
+base_engine: docling           # 또는 mineru — 채택한 raw 엔진
+corrections:                   # 보정 사유 (불일치 발생 시)
+  - "예: heading 'X' 누락 인식 — docling 채택"
+  - "예: 표 셀 '54,250' MinerU 오인식 → PDF 시각 검증 후 docling 채택"
+generated: YYYY-MM-DD
+host: <hostname>
+---
+
+<본문 — 정제된 풀텍스트 markdown>
+```
+
+- 일치 회차: base_engine 의 markdown 그대로 + `corrections: []` 빈 list
+- 불일치 회차: 시각 검증 사유에 따라 본문 보정 + corrections 에 변경 기록
+- refined.md 의 본문은 PDF 의 모든 내용을 담은 풀텍스트 — 동반 노트의 §핵심내용 (요약) 과 역할 분리. 동반 노트는 인지·관찰, refined.md 는 원본 충실 재현.
 
 ### 4. 중복·연결 검사 (CLAUDE.md §0)
 
@@ -146,6 +166,10 @@ CLAUDE.md 의 파일명 규칙 (`YYYY-MM-DD_출처_내용.ext` 이벤트 / `저�
      - `docling.json` — markdown + doctags + json_structure + pages + runtime_sec
      - `mineru.json` — markdown + json_structure (middle.json) + pages + runtime_sec. **MinerU sub-artifacts (layout.pdf, span.pdf, images/) 는 entrypoint 의 tempdir cleanup 시 손실 — Phase 2 future work**
      - `diff.json` — 구조적 비교 metrics + thresholds + verdict + details
+   - **Obsidian 비교 편의용 추가 파일** (§7-2-extra):
+     - `docling.md` — `docling.json` 의 `markdown` 필드만 추출 (`python3 -c "import json; print(json.load(open('docling.json'))['markdown'])" > docling.md`)
+     - `mineru.md` — 동일 패턴으로 `mineru.json` 의 markdown 필드 추출
+     - **`refined.md`** — §3 에서 작성한 정제본 (Claude 가 raw 둘을 보정한 풀텍스트, frontmatter + 본문)
 3. `~/projects/2nd-brain-vault/knowledge/0X_.../<새이름>.md` 작성:
    - frontmatter (CLAUDE.md 표준 — `title`·`source`·`date`·`tags`·`sources:` 상대경로 + **`parse:` 상대경로**)
      ```yaml
@@ -248,6 +272,7 @@ BRAIN_PDF_FORCE_VARIANT=gpu make run-brain-pdf ARGS="brain-pdf --version"   # �
 
 - 2026-05-13 — 최초 작성 (P0.2). PROGRESS.md (P0.1) 직후. Dr. Ben 결정 Q1=YES (mini SDD) + Q2=a (SKILL_CONTRACT 재해석 적용) + P1.1=b + P1.2=Docker 반영.
 - 2026-05-14 — **활성화** (`status: design-only` → `active`). Phase 1~3 (P1.1~P3.4) 모두 마감. 4 PDF (학회 참석확인증 3 + 회계공시 1) 로 절차 전체 검증 통과. Manual test commands 와 §2 호출 형식을 P1.3/P2.x 확정 후의 실제 form 으로 갱신 (compose overlay 3종·WORKDIR 마운트·`brain-pdf brain-pdf` 이중 호출 명시). brain-pdf 이미지는 `2026.05.14` (VERSION 0.2.0).
-- 2026-05-15 — **파싱 원본 보존 도입**. §7 에 `sources/<PARA>/<새stem>/_parse/{docling,mineru,diff}.json` sub-folder 생성 단계 추가. 동반 노트 frontmatter 에 `parse:` 필드 표준화. §8 에 WORKDIR rmdir 명시 + processed.jsonl 에 `parse_dir` 필드 추가. Dr. Ben 의 "파싱 원본도 보존되어야 한다" 피드백 — 동반 노트는 요약만이라 추후 재처리·재요약 시 raw 가 필요. MinerU sub-artifacts (layout.pdf·span.pdf·images/) 는 entrypoint.py 의 tempdir cleanup 에서 손실 → Phase 2 future work. 기존 5건 (한국원자력의학원 2 + 대한핵의학회 3) 노트북에서 백채움.
+- 2026-05-15 — **파싱 원본 보존 도입**. §7 에 `sources/<PARA>/<새stem>/_parse/{docling,mineru,diff}.json` sub-folder 생성 단계 추가. 동반 노트 frontmatter 에 `parse:` 필드 표준화. §8 에 WORKDIR rmdir 명시 + processed.jsonl 에 `parse_dir` 필드 추가. Dr. Ben 의 "파싱 원본도 보존되어야 한다" 피드백 — 동반 노트는 요약만이라 추후 재처리·재요약 시 raw 가 필요. MinerU sub-artifacts (layout.pdf·span.pdf·images/) 는 entrypoint.py 의 tempdir cleanup 에서 손실 → Phase 2 future work. 기존 5건 (한국원자력의학원 2 + 대한핵의학회 3) 노트북에서 백채움. 추가로 Obsidian 비교 편의용 docling.md / mineru.md (JSON의 markdown 필드 추출본) 도 `_parse/` 에 함께 저장.
+- 2026-05-15 (오후) — **정제본 (refined.md) 도입**. Dr. Ben 의 "두 차이 보정한 최종 정제본도 저장하자" 피드백 — 가장 가치 있는 자료. §3 에 정제본 작성 단계 추가 (frontmatter: source_pdf·base_engine·corrections·generated·host + 본문 풀텍스트). §7 의 `_parse/` 내용에 `refined.md` 포함. 역할 분리 명확화 — 동반 노트 = 요약·관찰·연결, `refined.md` = 원본 충실 재현 풀텍스트.
 - 작성자: Dr. Ben + Claude.
 - 수정 시: §Spec·§Plan 변경은 PROGRESS.md 가 권위 — 본 SKILL.md 는 절차 정렬만.
