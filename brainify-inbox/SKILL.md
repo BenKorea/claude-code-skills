@@ -128,23 +128,41 @@ CLAUDE.md 의 파일명 규칙 (`YYYY-MM-DD_출처_내용.ext` 이벤트 / `저�
 
 "이대로 진행해도 될까요?" — 같은 출처·유사 형식은 패턴 승인. 새 출처·이질적 자료는 개별 승인. Dr. Ben 이 분류·파일명·노트 내용 수정 요청 시 즉시 반영.
 
-### 7. 이동·노트 생성
+### 7. 이동·노트 생성 + 파싱 원본 보존
 
 승인 받은 PDF 별로 순차:
 
-1. `mv ~/projects/2nd-brain-vault/sources/00_inbox/<원파일> ~/projects/2nd-brain-vault/sources/0X_.../<새이름>`
-2. `~/projects/2nd-brain-vault/knowledge/0X_.../<새이름>.md` 작성:
-   - frontmatter (CLAUDE.md 표준 — `title`·`source`·`date`·`tags`·`sources:` 상대경로)
-   - 본문 첫 줄: `[원본 PDF](sources/0X_.../<새이름>.ext)`
+1. `mv ~/projects/2nd-brain-vault/sources/00_inbox/<원파일> ~/projects/2nd-brain-vault/sources/0X_.../<새이름>.<ext>`
+2. **파싱 원본 보존** — 원본 PDF 와 같은 디렉토리에 `<새stem>/_parse/` sub-folder 생성:
+   ```bash
+   PARSE_DIR=~/projects/2nd-brain-vault/sources/0X_.../<새stem>/_parse
+   mkdir -p "$PARSE_DIR"
+   mv "$WORKDIR"/{<원stem>.docling.json,<원stem>.mineru.json,<원stem>.diff.json} \
+      "$PARSE_DIR"/{docling.json,mineru.json,diff.json}
+   ```
+   - `_parse/` 접두어 `_` 는 Obsidian 탐색 시 정렬 최하단 + vault 검색 잡음 최소화 의도
+   - 파일명은 단순화 (`<stem>.docling.json` → `docling.json`) — 폴더가 이미 stem 으로 식별
+   - 3개 JSON 내용 (entrypoint 의 stdout JSON 그대로):
+     - `docling.json` — markdown + doctags + json_structure + pages + runtime_sec
+     - `mineru.json` — markdown + json_structure (middle.json) + pages + runtime_sec. **MinerU sub-artifacts (layout.pdf, span.pdf, images/) 는 entrypoint 의 tempdir cleanup 시 손실 — Phase 2 future work**
+     - `diff.json` — 구조적 비교 metrics + thresholds + verdict + details
+3. `~/projects/2nd-brain-vault/knowledge/0X_.../<새이름>.md` 작성:
+   - frontmatter (CLAUDE.md 표준 — `title`·`source`·`date`·`tags`·`sources:` 상대경로 + **`parse:` 상대경로**)
+     ```yaml
+     sources: sources/0X_.../<새stem>.<ext>
+     parse:   sources/0X_.../<새stem>/_parse/
+     ```
+   - 본문 첫 줄: `[원본 PDF](sources/0X_.../<새stem>.<ext>)`
    - 한 줄 요약 / 핵심 내용 / 내 생각 / `[[관련 노트]]` 링크
    - 듀얼 파싱 채택 엔진 + 사유 (불일치 시) 기록
-3. 실패 시 즉시 중단·보고 (이미 이동된 파일은 그대로 두고 어디서 멈췄는지 명시).
+4. 실패 시 즉시 중단·보고 (이미 이동된 파일은 그대로 두고 어디서 멈췄는지 명시).
 
 ### 8. 마무리
 
 - `00_inbox` 비어짐 확인 (`ls`).
-- 처리 이력 `state/processed.jsonl` 에 append (SHA·원본 경로·정착 경로·diff 채택 사유).
-- 요약 보고 (처리 건수·소요 시간·시각 검증 발생 건수).
+- WORKDIR (`/tmp/brainify-XXXXXX/`) — §7-2 에서 `_parse/` 로 mv 한 후 빈 디렉토리만 남음. `rmdir "$WORKDIR"` 로 정리.
+- 처리 이력 `state/processed.jsonl` 에 append (SHA·원본 경로·정착 경로·`parse_dir` 경로·diff 채택 사유).
+- 요약 보고 (처리 건수·소요 시간·시각 검증 발생 건수·`_parse/` 정착 디렉토리 목록).
 
 ## Acceptance examples
 
@@ -230,5 +248,6 @@ BRAIN_PDF_FORCE_VARIANT=gpu make run-brain-pdf ARGS="brain-pdf --version"   # �
 
 - 2026-05-13 — 최초 작성 (P0.2). PROGRESS.md (P0.1) 직후. Dr. Ben 결정 Q1=YES (mini SDD) + Q2=a (SKILL_CONTRACT 재해석 적용) + P1.1=b + P1.2=Docker 반영.
 - 2026-05-14 — **활성화** (`status: design-only` → `active`). Phase 1~3 (P1.1~P3.4) 모두 마감. 4 PDF (학회 참석확인증 3 + 회계공시 1) 로 절차 전체 검증 통과. Manual test commands 와 §2 호출 형식을 P1.3/P2.x 확정 후의 실제 form 으로 갱신 (compose overlay 3종·WORKDIR 마운트·`brain-pdf brain-pdf` 이중 호출 명시). brain-pdf 이미지는 `2026.05.14` (VERSION 0.2.0).
+- 2026-05-15 — **파싱 원본 보존 도입**. §7 에 `sources/<PARA>/<새stem>/_parse/{docling,mineru,diff}.json` sub-folder 생성 단계 추가. 동반 노트 frontmatter 에 `parse:` 필드 표준화. §8 에 WORKDIR rmdir 명시 + processed.jsonl 에 `parse_dir` 필드 추가. Dr. Ben 의 "파싱 원본도 보존되어야 한다" 피드백 — 동반 노트는 요약만이라 추후 재처리·재요약 시 raw 가 필요. MinerU sub-artifacts (layout.pdf·span.pdf·images/) 는 entrypoint.py 의 tempdir cleanup 에서 손실 → Phase 2 future work. 기존 5건 (한국원자력의학원 2 + 대한핵의학회 3) 노트북에서 백채움.
 - 작성자: Dr. Ben + Claude.
 - 수정 시: §Spec·§Plan 변경은 PROGRESS.md 가 권위 — 본 SKILL.md 는 절차 정렬만.
