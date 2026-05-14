@@ -2,7 +2,7 @@
 name: brainify-inbox
 description: sources/00_inbox/ 의 PDF 들을 Docling+MinerU 듀얼 파싱·요약하고, Claude 가 두 출력의 diff 를 시각 검증한 뒤 PARA 분류·파일명을 제안 → Dr. Ben 승인 → sources/ 정식 위치로 이동 + knowledge/ 동반 노트 생성하는 인터랙티브 스킬. "인박스 브레인화", "PDF 정리해줘", "오늘 들어온 자료 처리", "/brainify-inbox" 류 트리거.
 allowed_tools: [bash, read, write, edit]
-status: design-only
+status: active
 ---
 
 # brainify-inbox
@@ -60,9 +60,9 @@ Dr. Ben 의 트리거 (자연어 또는 슬래시):
 
 `design-only` 단계에서는 *어느 트리거든* 미구현 보고 + PROGRESS.md §Tasks 현재 상태 안내 후 종료.
 
-## 절차 (구현 완료 후)
+## 절차
 
-> Phase 0 (현재) 에서는 아래 절차가 실행되지 않는다. `status: design-only` 제거 후 활성.
+> Phase 1~3 마감 (2026-05-14) — 본 절차는 호출 시 실행된다. 디자인 단계로의 회귀가 필요하면 frontmatter `status: active` → `design-only` 로 되돌릴 것.
 
 ### 0. 전제 확인
 
@@ -78,15 +78,26 @@ Dr. Ben 의 트리거 (자연어 또는 슬래시):
 
 ### 2. 듀얼 파싱 (각 PDF)
 
-각 PDF 에 대해 병렬 또는 순차로:
+각 PDF 에 대해 순차로 (병렬은 GPU 메모리 경합 위험 — Phase 1 = 순차 권장).
+
+**호출 형식**: `~/projects/2nd-brain-docker/` 의 `scripts/detect-compose.sh` 가 PC 환경 (NVIDIA 유무) 을 자동 감지해 적절한 compose 체인 출력. 양 PC 공통.
 
 ```bash
-docker compose -f ~/projects/2nd-brain-docker/compose.yaml run --rm brain-pdf parse-docling <pdf>  > <pdf>.docling.json
-docker compose -f ~/projects/2nd-brain-docker/compose.yaml run --rm brain-pdf parse-mineru  <pdf>  > <pdf>.mineru.json
-docker compose -f ~/projects/2nd-brain-docker/compose.yaml run --rm brain-pdf diff <pdf>.docling.json <pdf>.mineru.json  > <pdf>.diff.json
+# 호스트 임시 디렉토리를 컨테이너 /work 에 마운트 — diff subcmd 가 두 파싱 결과를 한 컨테이너 안에서 읽을 수 있게 함.
+WORKDIR=$(mktemp -d -t brainify-XXXXXX)
+cd ~/projects/2nd-brain-docker
+COMPOSE=$(./scripts/detect-compose.sh)   # auto: desktop=gpu / laptop=cpu
+INBOX_CONTAINER=/home/user/projects/2nd-brain-vault/sources/00_inbox
+
+for pdf in <inbox PDFs>; do
+  stem="${pdf%.pdf}"
+  docker compose $COMPOSE run --rm -v "$WORKDIR:/work" brain-pdf brain-pdf parse-docling "$INBOX_CONTAINER/$pdf" > "$WORKDIR/$stem.docling.json"
+  docker compose $COMPOSE run --rm -v "$WORKDIR:/work" brain-pdf brain-pdf parse-mineru  "$INBOX_CONTAINER/$pdf" > "$WORKDIR/$stem.mineru.json"
+  docker compose $COMPOSE run --rm -v "$WORKDIR:/work" brain-pdf brain-pdf diff "/work/$stem.docling.json" "/work/$stem.mineru.json" > "$WORKDIR/$stem.diff.json"
+done
 ```
 
-(정확한 호출 형식·임시 파일 경로는 P1.3·P2.x 에서 확정.)
+성능 차이: 데스크탑 GPU = parse-mineru ~30 초, 노트북 CPU = parse-mineru ~80-150 초 예상 (Arrow Lake-H CPU 추론). 컨테이너 이미지·코드 동일, PyTorch 가 runtime 에 CUDA/CPU 백엔드 자동 선택.
 
 ### 3. Diff 검증
 
@@ -166,24 +177,40 @@ CLAUDE.md 의 파일명 규칙 (`YYYY-MM-DD_출처_내용.ext` 이벤트 / `저�
 
 ## Manual test commands
 
+호스트 cwd 가 `~/projects/2nd-brain-docker/`. Makefile 타겟이 `detect-compose.sh` 통해 PC 환경 자동 감지 — 양 PC (데스크탑 RTX 3060 / 노트북 Intel Arc) 에서 같은 명령으로 작동.
+
 ```bash
-# 컨테이너 빌드 확인
-docker compose -f ~/projects/2nd-brain-docker/compose.yaml build brain-pdf
+# 컨테이너 빌드 — 양 PC 공통. 데스크탑은 자동 GPU 활성, 노트북은 자동 CPU.
+make build-brain-pdf
+
+# 버전 확인
+make run-brain-pdf ARGS="brain-pdf --version"   # → 0.2.0
 
 # 단일 PDF 파싱 (Docling)
-docker compose -f ~/projects/2nd-brain-docker/compose.yaml run --rm brain-pdf parse-docling /vault/sources/00_inbox/sample.pdf
+make run-brain-pdf ARGS="brain-pdf parse-docling /home/user/projects/2nd-brain-vault/sources/00_inbox/<sample>.pdf" > /tmp/a.json
 
 # 단일 PDF 파싱 (MinerU)
-docker compose -f ~/projects/2nd-brain-docker/compose.yaml run --rm brain-pdf parse-mineru  /vault/sources/00_inbox/sample.pdf
+make run-brain-pdf ARGS="brain-pdf parse-mineru /home/user/projects/2nd-brain-vault/sources/00_inbox/<sample>.pdf" > /tmp/b.json
 
-# Diff (두 파싱 결과)
-docker compose -f ~/projects/2nd-brain-docker/compose.yaml run --rm brain-pdf diff /tmp/a.docling.json /tmp/a.mineru.json
+# Diff (두 파싱 결과 — 컨테이너 안에서 두 파일이 보여야 하므로 동일 -v 마운트 사용)
+WORKDIR=$(mktemp -d) && cp /tmp/{a,b}.json "$WORKDIR/"
+COMPOSE=$(./scripts/detect-compose.sh)
+docker compose $COMPOSE run --rm -v "$WORKDIR:/work" brain-pdf brain-pdf diff /work/a.json /work/b.json
 
-# Offline 검증 (네트워크 차단)
-docker compose -f ~/projects/2nd-brain-docker/compose.yaml run --rm --network none brain-pdf parse-docling /vault/sources/00_inbox/sample.pdf
+# Offline 검증 (네트워크 차단 — docker compose run 은 --network 미지원이라 raw docker run 사용)
+# GPU 있는 PC: --gpus all 추가. 없는 PC: 그 flag 제외. detect-compose.sh 우회라 수동 분기.
+docker run --rm --network none $([ "$(./scripts/detect-compose.sh | grep -c gpu.yml)" -eq 1 ] && echo "--gpus all") -u 1000:1000 \
+  -v "$HOME/projects/2nd-brain-vault:/home/user/projects/2nd-brain-vault" \
+  -v "2nd-brain-docker_brain-pdf-models:/home/user/.cache/huggingface" \
+  2nd-brain/brain-pdf:2026.05.14 \
+  brain-pdf parse-docling /home/user/projects/2nd-brain-vault/sources/00_inbox/<sample>.pdf
+
+# 강제 변형 (디버깅):
+BRAIN_PDF_FORCE_VARIANT=cpu make run-brain-pdf ARGS="brain-pdf --version"   # NVIDIA 있는 PC 에서 강제 CPU
+BRAIN_PDF_FORCE_VARIANT=gpu make run-brain-pdf ARGS="brain-pdf --version"   # 감지 misfire 시 강제 GPU
 ```
 
-(정확한 마운트 경로·서비스명·인자 형식은 P1.3 에서 확정.)
+호출 형식의 `brain-pdf brain-pdf` 중복은 의도 — 앞은 compose **서비스명**, 뒤는 컨테이너 안 **CLI binary**. ENTRYPOINT 미설정 (daemon `sleep infinity` CMD 와 공존 위함) 의 결과.
 
 ## 외부 의존
 
@@ -202,5 +229,6 @@ docker compose -f ~/projects/2nd-brain-docker/compose.yaml run --rm --network no
 ## 메타
 
 - 2026-05-13 — 최초 작성 (P0.2). PROGRESS.md (P0.1) 직후. Dr. Ben 결정 Q1=YES (mini SDD) + Q2=a (SKILL_CONTRACT 재해석 적용) + P1.1=b + P1.2=Docker 반영.
+- 2026-05-14 — **활성화** (`status: design-only` → `active`). Phase 1~3 (P1.1~P3.4) 모두 마감. 4 PDF (학회 참석확인증 3 + 회계공시 1) 로 절차 전체 검증 통과. Manual test commands 와 §2 호출 형식을 P1.3/P2.x 확정 후의 실제 form 으로 갱신 (compose overlay 3종·WORKDIR 마운트·`brain-pdf brain-pdf` 이중 호출 명시). brain-pdf 이미지는 `2026.05.14` (VERSION 0.2.0).
 - 작성자: Dr. Ben + Claude.
 - 수정 시: §Spec·§Plan 변경은 PROGRESS.md 가 권위 — 본 SKILL.md 는 절차 정렬만.
