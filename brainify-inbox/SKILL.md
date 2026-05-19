@@ -153,15 +153,15 @@ CLAUDE.md 의 파일명 규칙 (`YYYY-MM-DD_출처_내용.ext` 이벤트 / `저�
 승인 받은 PDF 별로 순차:
 
 1. `mv ~/projects/2nd-brain-vault/sources/00_inbox/<원파일> ~/projects/2nd-brain-vault/sources/0X_.../<새이름>.<ext>`
-2. **파싱 원본 보존** — 원본 PDF 와 같은 디렉토리에 `<새stem>/_parse/` sub-folder 생성:
+2. **파싱 원본 보존** — 원본 파일 바로 옆에 `<새이름>.<ext>_parse/` 폴더 생성 (원본파일명 전체+확장자에 `_parse` 접미. 중간 stem 폴더 없음, 산출물 직접 수납):
    ```bash
-   PARSE_DIR=~/projects/2nd-brain-vault/sources/0X_.../<새stem>/_parse
+   PARSE_DIR=~/projects/2nd-brain-vault/sources/0X_.../<새이름>.<ext>_parse
    mkdir -p "$PARSE_DIR"
    mv "$WORKDIR"/{<원stem>.docling.json,<원stem>.mineru.json,<원stem>.diff.json} \
       "$PARSE_DIR"/{docling.json,mineru.json,diff.json}
    ```
-   - `_parse/` 접두어 `_` 는 Obsidian 탐색 시 정렬 최하단 + vault 검색 잡음 최소화 의도
-   - 파일명은 단순화 (`<stem>.docling.json` → `docling.json`) — 폴더가 이미 stem 으로 식별
+   - 접미사 `_parse` 는 파생물이 원본 바로 옆에 정렬되게 함 + glob `*_parse` 로 전체 열거. 도출 규칙 = `sources:` 경로 + `_parse` 문자열 결합 (무판단·결정론적·확장자 포함이라 동일 stem 다중 확장자 충돌 안전). 2026-05-19 확정 — 구 `<stem>/_parse/` 의 빈 중간 폴더 제거
+   - 파일명은 단순화 (`<stem>.docling.json` → `docling.json`) — 폴더명이 이미 원본파일명으로 식별
    - 3개 JSON 내용 (entrypoint 의 stdout JSON 그대로):
      - `docling.json` — markdown + doctags + json_structure + pages + runtime_sec
      - `mineru.json` — markdown + json_structure (middle.json) + pages + runtime_sec. **MinerU sub-artifacts (layout.pdf, span.pdf, images/) 는 entrypoint 의 tempdir cleanup 시 손실 — Phase 2 future work**
@@ -173,8 +173,8 @@ CLAUDE.md 의 파일명 규칙 (`YYYY-MM-DD_출처_내용.ext` 이벤트 / `저�
 3. `~/projects/2nd-brain-vault/knowledge/0X_.../<새이름>.md` 작성:
    - frontmatter (CLAUDE.md 표준 — `title`·`source`·`date`·`tags`·`sources:` 상대경로 + **`parse:` 상대경로**)
      ```yaml
-     sources: sources/0X_.../<새stem>.<ext>
-     parse:   sources/0X_.../<새stem>/_parse/
+     sources: sources/0X_.../<새이름>.<ext>
+     parse:   sources/0X_.../<새이름>.<ext>_parse/
      ```
    - 본문 첫 줄: `[원본 PDF](sources/0X_.../<새stem>.<ext>)`
    - 한 줄 요약 / 핵심 내용 / 내 생각 / `[[관련 노트]]` 링크
