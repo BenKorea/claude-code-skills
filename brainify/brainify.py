@@ -3,7 +3,7 @@
 
 서브커맨드 (모두 stdout JSON, 단 --help 제외):
   scan                 00_inbox 의 처리 대상 나열 + 중복(dedup) 상태.
-  inspect <item>       항목의 markdown 추출(스레드 본문 + 첨부 2brain-parser 파싱) + 식별자.
+  inspect <item>       항목의 markdown 추출(스레드 본문 + 첨부 2nd-brain-parser 파싱) + 식별자.
   commit  <item> ...   원본을 sources/<para>/<name>/ 로 이동 + knowledge/<para>/<name>.md
                        동반 노트(frontmatter+본문) 작성 + 정책 플래그 + inbox 비움.
   audit                플래그된(para_review:pending / parse_confidence:low) 노트 나열.
@@ -13,7 +13,7 @@
 
 환경변수:
   BRAINIFY_VAULT          정본 vault (기본 ~/projects/2nd-brain-vault)
-  BRAINIFY_PARSER_IMAGE   2brain-parser 이미지 (기본 ghcr.io/benkorea/2brain-parser:latest)
+  BRAINIFY_PARSER_IMAGE   2nd-brain-parser 이미지 (기본 ghcr.io/benkorea/2nd-brain-parser:latest)
   BRAINIFY_MODELS_VOLUME  HF 모델 캐시 볼륨 (기본 2nd-brain-docker_brain-pdf-models)
 """
 from __future__ import annotations
@@ -31,10 +31,10 @@ VAULT = pathlib.Path(os.path.expanduser(os.environ.get("BRAINIFY_VAULT", "~/proj
 INBOX = VAULT / "sources" / "00_inbox"
 KNOWLEDGE = VAULT / "knowledge"
 SOURCES = VAULT / "sources"
-PARSER_IMAGE = os.environ.get("BRAINIFY_PARSER_IMAGE", "ghcr.io/benkorea/2brain-parser:latest")
+PARSER_IMAGE = os.environ.get("BRAINIFY_PARSER_IMAGE", "ghcr.io/benkorea/2nd-brain-parser:latest")
 MODELS_VOLUME = os.environ.get("BRAINIFY_MODELS_VOLUME", "2nd-brain-docker_brain-pdf-models")
 
-# 2brain-parser 가 파싱하는 확장자 (그 외는 첨부로만 보존, 본문 추출 안 함)
+# 2nd-brain-parser 가 파싱하는 확장자 (그 외는 첨부로만 보존, 본문 추출 안 함)
 PARSEABLE = {".pdf", ".docx", ".pptx", ".xlsx", ".hwp", ".hwpx", ".doc", ".ppt", ".xls",
              ".odt", ".odp", ".ods", ".rtf"}
 
@@ -85,13 +85,13 @@ def _container_path(host_path: pathlib.Path) -> str:
 
 
 def _parse(host_path: pathlib.Path) -> dict:
-    """2brain-parser 컨테이너로 파일 1개 → {via, markdown}. 실패 시 markdown=''."""
+    """2nd-brain-parser 컨테이너로 파일 1개 → {via, markdown}. 실패 시 markdown=''."""
     cmd = [
         "docker", "run", "--rm", "-u", f"{os.getuid()}:{os.getgid()}",
         "-v", f"{VAULT}:/home/user/projects/2nd-brain-vault",
         "-v", f"{MODELS_VOLUME}:/home/user/.cache/huggingface",
         "-e", "HF_HOME=/home/user/.cache/huggingface", "-e", "HOME=/home/user",
-        PARSER_IMAGE, "2brain-parser", "parse-docling", _container_path(host_path),
+        PARSER_IMAGE, "2nd-brain-parser", "parse-docling", _container_path(host_path),
     ]
     try:
         r = subprocess.run(cmd, capture_output=True, text=True, timeout=600)

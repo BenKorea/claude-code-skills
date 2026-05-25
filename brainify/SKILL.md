@@ -26,7 +26,7 @@ helper 는 `python3 ~/.claude/skills/brainify/brainify.py <subcommand>` 로 호�
    dedup 상태(`already_brainified`, `existing_notes`)를 받는다.
    - `already_brainified: true` → 기본 skip. 사용자에게 "이미 있음, 덮어쓸까요?" 만 확인.
 2. **inspect** — 항목별 `brainify.py inspect "<item>"`. 스레드 본문(`_thread.md`)과
-   첨부의 파싱 markdown(2brain-parser), `identifier`, `via` 를 받는다.
+   첨부의 파싱 markdown(2nd-brain-parser), `identifier`, `via` 를 받는다.
    - `via: error` 또는 markdown 이 비정상적으로 짧으면 → commit 시 `--confidence low`.
 3. **판단 (LLM — 여기가 이 스킬의 핵심)**: inspect 결과를 읽고 결정한다.
    - **PARA 좌표**: `01_projects/<폴더>` · `02_areas/<영역>` · `03_resources/<주제>` ·
@@ -61,7 +61,7 @@ helper 는 `python3 ~/.claude/skills/brainify/brainify.py <subcommand>` 로 호�
 ## 제약
 
 - **정본 vault 는 WSL2 ext4 `~/projects/2nd-brain-vault`** — git 아님(SyncThing 동기), commit 하지 않음.
-- 파싱은 **로컬 전용 2brain-parser 컨테이너**(외부 API 0) — 재무·민감 자료 leak 방지.
+- 파싱은 **로컬 전용 2nd-brain-parser 컨테이너**(외부 API 0) — 재무·민감 자료 leak 방지.
 - 원본은 불변: `sources/` 의 파일은 수정하지 않고 이동만. 생각·요약은 `knowledge/` 의 .md 에.
 - Docker 가 없거나 `inspect` 가 `via: error` 면 그 항목은 본문 없이 첨부 보존만 하고
   `parse_confidence: low` 로 표시 후 감사로 넘긴다 (파이프라인을 막지 않는다).

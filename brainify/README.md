@@ -23,20 +23,20 @@ scan→inspect→(판단)→commit 한 줄기라 wrapping 오버헤드만 늘기
 | 명령 | 하는 일 |
 |---|---|
 | `scan` | 00_inbox 처리 대상(스레드 폴더·낱개 파일) + dedup 상태 JSON |
-| `inspect <item>` | 스레드 본문 + 첨부 2brain-parser 파싱 markdown + 식별자 |
+| `inspect <item>` | 스레드 본문 + 첨부 2nd-brain-parser 파싱 markdown + 식별자 |
 | `commit <item> --para .. --name .. --body-file ..` | 원본 이동 + 동반 노트 작성 + 플래그 + inbox 비움 |
 | `audit` | `para_review: pending`·`parse_confidence: low` 노트 나열(주간 감사) |
 
 ## 의존
 
-- **2brain-parser** 컨테이너 (`ghcr.io/benkorea/2brain-parser:latest`) — inspect 의 첨부 파싱.
+- **2nd-brain-parser** 컨테이너 (`ghcr.io/benkorea/2nd-brain-parser:latest`) — inspect 의 첨부 파싱.
   Docker 없으면 첨부 본문 없이 보존 + `parse_confidence: low`.
 - 정본 vault `~/projects/2nd-brain-vault` (env `BRAINIFY_VAULT` 로 변경 가능).
 
 ## 환경변수
 
 - `BRAINIFY_VAULT` — 정본 vault (기본 `~/projects/2nd-brain-vault`)
-- `BRAINIFY_PARSER_IMAGE` — 파서 이미지 (기본 `ghcr.io/benkorea/2brain-parser:latest`)
+- `BRAINIFY_PARSER_IMAGE` — 파서 이미지 (기본 `ghcr.io/benkorea/2nd-brain-parser:latest`)
 - `BRAINIFY_MODELS_VOLUME` — HF 모델 캐시 볼륨 (기본 `2nd-brain-docker_brain-pdf-models`)
 
 ## 정책
