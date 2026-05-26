@@ -289,20 +289,51 @@ def _person_by_contact(contact_id: str) -> pathlib.Path | None:
 
 
 def cmd_contacts(args) -> int:
-    """_thread.md participants → 인맥 매칭 상태. matched(노트 有)/unmatched(contact_id 有·노트 無)/no_contact."""
+    """_thread.md participants → 인맥 매칭. matched(노트 有: 링크·related_events)/unmatched(contact_id 有·노트 無:
+    new-person 신설 대상)/held(동명이인 보류: 주간검토)/no_contact(Contacts 미등록·무관)."""
     item = INBOX / args.item
-    matched, unmatched, no_contact = [], [], []
+    matched, unmatched, held, no_contact = [], [], [], []
     for p in _participants(item):
         cid = p.get("contact_id")
-        if not cid:
-            no_contact.append(p); continue
-        note = _person_by_contact(cid)
-        if note:
-            matched.append({**p, "note": str(note.relative_to(VAULT)), "wikilink": note.stem})
+        if cid:
+            note = _person_by_contact(cid)
+            (matched if note else unmatched).append(
+                {**p, "note": str(note.relative_to(VAULT)), "wikilink": note.stem} if note else p)
+        elif str(p.get("autocontact", "")).startswith("hold"):
+            held.append(p)
         else:
-            unmatched.append(p)
-    print(json.dumps({"item": args.item, "matched": matched,
-                      "unmatched": unmatched, "no_contact": no_contact}, ensure_ascii=False, indent=2))
+            no_contact.append(p)
+    print(json.dumps({"item": args.item, "matched": matched, "unmatched": unmatched,
+                      "held": held, "no_contact": no_contact}, ensure_ascii=False, indent=2))
+    return 0
+
+
+def cmd_new_person(args) -> int:
+    """인맥 노트 신설 (auto-created/unmatched contact_id 용). google_contact_id 로 멱등 — 이미 있으면 skip."""
+    if args.contact_id:
+        exist = _person_by_contact(args.contact_id)
+        if exist:
+            print(json.dumps({"ok": True, "skipped": "이미 있음", "note": str(exist.relative_to(VAULT))}, ensure_ascii=False)); return 0
+    name = (args.name or "").strip() or (args.email or "person").split("@")[0]
+    slug = _slug(name)
+    note = INMAEK / f"{slug}.md"
+    if note.exists():                                    # 동명 파일 충돌 → 이메일 local 로 구분
+        note = INMAEK / f"{slug}_{(args.email or '').split('@')[0]}.md"
+    note.parent.mkdir(parents=True, exist_ok=True)
+    rel = [f'  - "[[{args.event}]] — {args.context}"'] if args.event else []
+    fm = ["---", f"title: {name}", f'aliases: ["{name}"]',
+          f"google_contact_id: {args.contact_id or ''}",
+          f"email: {args.email or ''}", f"organization: {args.org or ''}",
+          f"first_encounter: {args.date or ''}", "relationship_tags: []",
+          "related_events:" if rel else "related_events: []", *rel,
+          "tags: [인맥]", "---", "",
+          "## 첫 만남 맥락", "",
+          f"(brainify 자동 등록 — {args.event or '메일'} 에서 신원 포착. 맥락은 추후 보강)", "",
+          "## 대화 핵심", "", "-", "",
+          "## 상대 관심사 / 내가 알게 된 것", "", "-", "",
+          "## 관련 노트", "", "-", ""]
+    note.write_text("\n".join(fm) + "\n", encoding="utf-8")
+    print(json.dumps({"ok": True, "note": str(note.relative_to(VAULT)), "created": True}, ensure_ascii=False))
     return 0
 
 
@@ -360,9 +391,17 @@ def main(argv=None) -> int:
     ple.add_argument("--person", default="", help="인맥 노트 stem (contact-id 없을 때)")
     ple.add_argument("--contact-id", dest="contact_id", default="", help="google_contact_id (매칭 권위 키, 우선)")
     ple.add_argument("--context", default="", help="한 줄 맥락")
+    pnp = sub.add_parser("new-person")
+    pnp.add_argument("--name", required=True)
+    pnp.add_argument("--email", default="")
+    pnp.add_argument("--contact-id", dest="contact_id", default="")
+    pnp.add_argument("--org", default="")
+    pnp.add_argument("--date", default="")
+    pnp.add_argument("--event", default="", help="첫 연결 이벤트 노트 stem")
+    pnp.add_argument("--context", default="", help="related_events 한 줄 맥락")
     args = ap.parse_args(argv)
     return {"scan": cmd_scan, "inspect": cmd_inspect, "commit": cmd_commit, "audit": cmd_audit,
-            "contacts": cmd_contacts, "link-event": cmd_link_event}[args.cmd](args)
+            "contacts": cmd_contacts, "link-event": cmd_link_event, "new-person": cmd_new_person}[args.cmd](args)
 
 
 if __name__ == "__main__":

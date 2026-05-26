@@ -50,13 +50,17 @@ helper 는 `python3 ~/.claude/skills/brainify/brainify.py <subcommand>` 로 호�
    helper 가 원본을 `sources/<para>/<name>/` 로 이동하고, `knowledge/<para>/<name>.md` 에
    frontmatter(+ `identifier`, `para_review: pending`, `parse_confidence`) + 본문을 쓴 뒤
    00_inbox 를 비운다.
-5. **인맥 반영** (commit 후 — 노트 `<name>` 확정됐으므로): §2 `contacts` 의
-   - `matched` 각 인물 → `brainify.py link-event "<name>" --contact-id "<contact_id>" --context "<한 줄 맥락>"`.
-     그 사람 인맥 노트 `related_events:` 에 `[[<name>]]` 한 줄을 **멱등** 추가(이미 있으면 skip) → 관계 타임라인 누적.
-   - `unmatched`(contact_id 는 있는데 인맥 노트 없음) → **신규 인맥 후보**로 보고만. **자동 생성 금지** —
-     사무국·뉴스레터 등 잡음이 많아, 인맥 노트 신설·풍부한 맥락(대화핵심·관심사)은 주간 감사/수동.
-   - `no_contact`(Google Contacts 미등록) → 무시(필요 시 Contacts 등록 권유).
-6. 처리 결과를 표로 보고: 항목 → PARA 좌표 → 노트 경로 → 인맥 링크(matched N) → 신규 인맥 후보(unmatched) → 플래그.
+5. **인맥 반영** (commit 후 — 노트 `<name>` 확정됐으므로): §2 `contacts` 의 4 버킷대로.
+   - `matched`(인맥 노트 있음) → `brainify.py link-event "<name>" --contact-id "<contact_id>" --context "<한 줄>"`.
+     그 사람 노트 `related_events:` 에 `[[<name>]]` 멱등 추가 → 관계 타임라인 누적.
+   - `unmatched`(contact_id 있는데 인맥 노트 없음 — gmail-label-actions 가 auto-create 한 신규 Contact 포함) →
+     `brainify.py new-person --name "<name>" --email "<email>" --contact-id "<cid>" --event "<name>" --context "<한 줄>"`
+     로 **인맥 노트 신설**(템플릿 스텁 + first_encounter + related_events). 게이트는 **Dr. Ben 의 라벨링** — 라벨한 스레드의
+     참여자라 신뢰. 풍부한 맥락(대화핵심·관심사)은 비워두고 주간 감사/수동 보강.
+   - `held`(동명이인 보류 — 같은 이름 Contact 가 다른 이메일로 존재) → **생성하지 말고 보고**. 주간 감사가
+     "기존 인물 새 이메일(병합)" vs "별개 신규" 판단.
+   - `no_contact`(Contacts 미등록·동명이인도 아님) → 무시.
+6. 처리 결과를 표로 보고: 항목 → PARA → 노트 → 인맥(matched 링크 N · 신규 노트 M · held 보류 K) → 플래그.
 
 배치일 때: **첫 1~2건 처리 후 패턴(분류 기준·노트 톤)을 Dr. Ben 에게 한 번 확인**받고
 나머지를 일괄 진행 (CLAUDE.md 배치 규칙).
@@ -70,7 +74,8 @@ helper 는 `python3 ~/.claude/skills/brainify/brainify.py <subcommand>` 로 호�
 - PARA 좌표가 모호 → 묻지 말고 **가장 그럴듯한 좌표로 낙관 배치 + `--confidence` 와 무관하게
   commit**(helper 가 `para_review: pending` 부착). 교정은 주간 감사가.
 - `via: error`/markdown 비정상·refined.md 부재로 듀얼검증 필요 → `--confidence low` 로 commit(유실 0).
-- **인맥 반영도 그대로 수행** — `contacts` → `matched` 본문 `[[링크]]` + commit 후 `link-event`(멱등). `unmatched` 는 인맥 노트 **생성하지 말고** 로그/보고에만(주간 감사가 신설 판단).
+- **인맥 반영도 그대로 수행** — `contacts` → `matched` 본문 `[[링크]]`+commit 후 `link-event`(멱등);
+  `unmatched` → `new-person` 으로 인맥 노트 신설(라벨링이 게이트라 헤드리스도 생성); `held`(동명이인) → 생성 말고 로그/보고만(주간 감사).
 - 배치 "패턴 확인" 스텝 생략 — 인자로 받은 그 1건만 처리하고 끝낸다(턴당 1항목).
 
 근거: [자동 우선·주간 감사 정책](../../../../projects/2nd-brain-vault/knowledge/02_areas/brain-system/automation-review-policy.md)
