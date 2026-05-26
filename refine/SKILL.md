@@ -63,6 +63,18 @@ helper 는 `python3 ~/.claude/skills/refine/refine.py <subcommand>` (출력 JSON
 처리 표: parse_dir → verdict → 채택 엔진 → corrections 수 → refined.md 경로. 다음 단계로
 `/brainify`(refined.md 소비 → PARA·노트) 안내.
 
+## 헤드리스 (`--headless`, brain-drain 무인 호출)
+
+`/refine --headless "<parse_dir>"` 로 호출되면(host `brain-drain` 타이머가 diverge 1건씩 `claude -p`)
+**사용자가 없다 — 절대 묻지 말 것**. 인자로 받은 그 `parse_dir` 1건만 처리:
+
+- verdict=diverge → 위 §2-b 그대로(`read` → 원본 PDF `Read` 비전검증 → `write`). **턴당 1문서**.
+- 비전검증이 불가(스캔 이미지·추출 빈약 등)하거나 확신이 낮으면 → 묻지 말고 `--base-engine vision`
+  + **`--confidence low`** 로 commit. 플래그(`refine_confidence: low`)는 주간 감사가 본다.
+- (promote 케이스는 brain-drain 이 claude 없이 직접 `refine.py promote` 하므로 헤드리스로는 오지 않음.)
+
+근거: [자동 우선·주간 감사 정책](../../../../projects/2nd-brain-vault/knowledge/02_areas/brain-system/automation-review-policy.md).
+
 ## 모드 — 비전검증 불가/실패
 
 - 원본 PDF 가 스캔 이미지라 두 파서 모두 빈 추출이면 → `Read` 로 페이지를 직접 비전 판독해 핵심만

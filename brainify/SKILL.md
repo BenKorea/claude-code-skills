@@ -52,6 +52,20 @@ helper 는 `python3 ~/.claude/skills/brainify/brainify.py <subcommand>` 로 호�
 배치일 때: **첫 1~2건 처리 후 패턴(분류 기준·노트 톤)을 Dr. Ben 에게 한 번 확인**받고
 나머지를 일괄 진행 (CLAUDE.md 배치 규칙).
 
+### 헤드리스 (`--headless`, brain-drain 무인 호출)
+
+`/brainify --headless "<item>"` 로 호출되면(host `brain-drain` 타이머가 `claude -p` 로 1건씩 발화)
+**사용자가 없다 — 절대 묻지 말 것**. 위 "물어본다"·"한 번 확인" 분기를 모두 다음으로 대체:
+
+- `already_brainified: true` → 묻지 말고 **skip**(로그만).
+- PARA 좌표가 모호 → 묻지 말고 **가장 그럴듯한 좌표로 낙관 배치 + `--confidence` 와 무관하게
+  commit**(helper 가 `para_review: pending` 부착). 교정은 주간 감사가.
+- `via: error`/markdown 비정상·refined.md 부재로 듀얼검증 필요 → `--confidence low` 로 commit(유실 0).
+- 배치 "패턴 확인" 스텝 생략 — 인자로 받은 그 1건만 처리하고 끝낸다(턴당 1항목).
+
+근거: [자동 우선·주간 감사 정책](../../../../projects/2nd-brain-vault/knowledge/02_areas/brain-system/automation-review-policy.md)
+— 건별 승인 폐기 = 낙관 배치 + 플래그 + 주간 감사. 헤드리스는 이 정책의 구현이다.
+
 ## 모드 2 — 주간 감사 (`/brainify audit`)
 
 1. **audit** — `brainify.py audit`. `para_review: pending` · `parse_confidence: low`
