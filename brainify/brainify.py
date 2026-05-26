@@ -31,6 +31,7 @@ VAULT = pathlib.Path(os.path.expanduser(os.environ.get("BRAINIFY_VAULT", "~/proj
 INBOX = VAULT / "sources" / "00_inbox"
 KNOWLEDGE = VAULT / "knowledge"
 SOURCES = VAULT / "sources"
+INMAEK = KNOWLEDGE / "02_areas" / "인맥"   # 인맥(관계 맥락) 허브 노트 폴더
 PARSER_IMAGE = os.environ.get("BRAINIFY_PARSER_IMAGE", "ghcr.io/benkorea/2nd-brain-parser:latest")
 MODELS_VOLUME = os.environ.get("BRAINIFY_MODELS_VOLUME", "2nd-brain-docker_brain-pdf-models")
 
@@ -251,6 +252,92 @@ def cmd_audit(_args) -> int:
     return 0
 
 
+# ── 인맥 반영 (발신자 → 관계 맥락) ─────────────────────────────────────────
+def _participants(item: pathlib.Path) -> list[dict]:
+    """_thread.md frontmatter 의 participants 파싱 (gmail-label-actions 가 '  - {json}' per line 기록)."""
+    tmd = item / "_thread.md"
+    if not tmd.exists():
+        return []
+    out, in_block = [], False
+    for line in tmd.read_text(encoding="utf-8").splitlines():
+        if line.startswith("participants:"):
+            in_block = True
+            continue
+        if in_block:
+            s = line.strip()
+            if s.startswith("- "):
+                try:
+                    out.append(json.loads(s[2:]))
+                except Exception:
+                    pass
+            elif s and not line.startswith(" "):   # 다음 키 / --- → 블록 끝
+                break
+    return out
+
+
+def _person_by_contact(contact_id: str) -> pathlib.Path | None:
+    """google_contact_id 로 인맥 노트 찾기 (매칭 권위 키)."""
+    if not contact_id or not INMAEK.exists():
+        return None
+    try:
+        r = subprocess.run(["grep", "-rl", f"google_contact_id: {contact_id}", str(INMAEK)],
+                           capture_output=True, text=True, timeout=20)
+        hits = [l for l in r.stdout.splitlines() if l.strip()]
+        return pathlib.Path(hits[0]) if hits else None
+    except Exception:
+        return None
+
+
+def cmd_contacts(args) -> int:
+    """_thread.md participants → 인맥 매칭 상태. matched(노트 有)/unmatched(contact_id 有·노트 無)/no_contact."""
+    item = INBOX / args.item
+    matched, unmatched, no_contact = [], [], []
+    for p in _participants(item):
+        cid = p.get("contact_id")
+        if not cid:
+            no_contact.append(p); continue
+        note = _person_by_contact(cid)
+        if note:
+            matched.append({**p, "note": str(note.relative_to(VAULT)), "wikilink": note.stem})
+        else:
+            unmatched.append(p)
+    print(json.dumps({"item": args.item, "matched": matched,
+                      "unmatched": unmatched, "no_contact": no_contact}, ensure_ascii=False, indent=2))
+    return 0
+
+
+def cmd_link_event(args) -> int:
+    """인맥 노트 related_events 에 이벤트 wikilink 멱등 추가 (--contact-id 우선, 없으면 --person stem)."""
+    note = _person_by_contact(args.contact_id) if args.contact_id else None
+    if note is None and args.person:
+        cand = INMAEK / f"{args.person}.md"
+        note = cand if cand.exists() else None
+    if note is None or not note.exists():
+        print(json.dumps({"ok": False, "error": f"인맥 노트 없음: {args.person or args.contact_id}"}, ensure_ascii=False)); return 1
+    txt = note.read_text(encoding="utf-8")
+    if f"[[{args.event}]]" in txt:                       # 멱등 — 이미 링크됨
+        print(json.dumps({"ok": True, "skipped": "이미 있음", "note": str(note.relative_to(VAULT))}, ensure_ascii=False)); return 0
+    lines = txt.splitlines()
+    if not lines or lines[0] != "---":
+        print(json.dumps({"ok": False, "error": "frontmatter 없음"}, ensure_ascii=False)); return 1
+    fm_end = next((i for i in range(1, len(lines)) if lines[i] == "---"), None)
+    if fm_end is None:
+        print(json.dumps({"ok": False, "error": "frontmatter 미종료"}, ensure_ascii=False)); return 1
+    entry = f'  - "[[{args.event}]] — {args.context}"' if args.context else f'  - "[[{args.event}]]"'
+    re_idx = next((i for i in range(1, fm_end) if lines[i].startswith("related_events:")), None)
+    if re_idx is not None:                               # 기존 리스트 끝에 삽입
+        ins = re_idx + 1
+        while ins < fm_end and lines[ins].lstrip().startswith("- "):
+            ins += 1
+        lines.insert(ins, entry)
+    else:                                                # 필드 신설 (frontmatter 끝 직전)
+        lines.insert(fm_end, "related_events:")
+        lines.insert(fm_end + 1, entry)
+    note.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    print(json.dumps({"ok": True, "note": str(note.relative_to(VAULT)), "added": entry.strip()}, ensure_ascii=False))
+    return 0
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(prog="brainify", description="brainify 결정형 helper")
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -267,9 +354,15 @@ def main(argv=None) -> int:
     pc.add_argument("--confidence", default="ok", choices=["ok", "low"])
     pc.add_argument("--body-file", default="")
     sub.add_parser("audit")
+    pcon = sub.add_parser("contacts"); pcon.add_argument("item")
+    ple = sub.add_parser("link-event")
+    ple.add_argument("event", help="이벤트 노트 stem (= 동반 노트 --name)")
+    ple.add_argument("--person", default="", help="인맥 노트 stem (contact-id 없을 때)")
+    ple.add_argument("--contact-id", dest="contact_id", default="", help="google_contact_id (매칭 권위 키, 우선)")
+    ple.add_argument("--context", default="", help="한 줄 맥락")
     args = ap.parse_args(argv)
-    return {"scan": cmd_scan, "inspect": cmd_inspect,
-            "commit": cmd_commit, "audit": cmd_audit}[args.cmd](args)
+    return {"scan": cmd_scan, "inspect": cmd_inspect, "commit": cmd_commit, "audit": cmd_audit,
+            "contacts": cmd_contacts, "link-event": cmd_link_event}[args.cmd](args)
 
 
 if __name__ == "__main__":
