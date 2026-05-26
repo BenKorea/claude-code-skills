@@ -84,8 +84,30 @@ def _container_path(host_path: pathlib.Path) -> str:
     return f"/home/user/projects/2nd-brain-vault/{rel}"
 
 
+def _refined(host_path: pathlib.Path) -> dict | None:
+    """refine 단계(2nd-brain-parser post)가 만든 `<원본>_parse/refined.md` 가 있으면 그 본문을 반환.
+    extract(parser-drain)+refine 파이프라인의 산출을 소비 — brainify 는 파싱·비교를 다시 하지 않는다."""
+    refined = host_path.parent / (host_path.name + "_parse") / "refined.md"
+    if not refined.exists():
+        return None
+    txt = refined.read_text(encoding="utf-8")
+    base = "refined"
+    body = txt
+    if txt.startswith("---"):
+        end = txt.find("\n---", 3)
+        if end != -1:
+            for line in txt[3:end].splitlines():
+                if line.startswith("base_engine:"):
+                    base = "refined:" + line.split(":", 1)[1].strip()
+            body = txt[end + 4:].lstrip("\n")
+    return {"via": base, "markdown": body}
+
+
 def _parse(host_path: pathlib.Path) -> dict:
-    """2nd-brain-parser 컨테이너로 파일 1개 → {via, markdown}. 실패 시 markdown=''."""
+    """파일 1개 → {via, markdown}. refined.md(refine 산출) 우선, 없으면 2nd-brain-parser docling fallback."""
+    pre = _refined(host_path)
+    if pre is not None:
+        return pre
     cmd = [
         "docker", "run", "--rm", "-u", f"{os.getuid()}:{os.getgid()}",
         "-v", f"{VAULT}:/home/user/projects/2nd-brain-vault",
