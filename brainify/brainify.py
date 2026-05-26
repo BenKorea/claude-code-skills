@@ -204,6 +204,11 @@ def cmd_commit(args) -> int:
         identifier = "sha:" + _sha256(item)
         id_field = f"source_sha256: {identifier.split(':',1)[1]}"
         shutil.move(str(item), str(dest_src / item.name))
+        # 파생 _parse(refined.md·json) 도 원본 옆으로 동반 이동 — 안 옮기면 inbox 에 고아로 남고
+        # source 와 분리됨(CLAUDE.md: _parse 는 sources 경로+_parse 위치). 스레드 분기는 폴더 통째 이동이라 무관.
+        parse_dir = item.parent / (item.name + "_parse")
+        if parse_dir.exists():
+            shutil.move(str(parse_dir), str(dest_src / parse_dir.name))
     body = pathlib.Path(args.body_file).read_text(encoding="utf-8") if args.body_file else ""
     tags = "[" + ", ".join(t.strip() for t in (args.tags or "").split(",") if t.strip()) + "]"
     note = KNOWLEDGE / para / f"{name}.md"
