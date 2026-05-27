@@ -1,11 +1,13 @@
 ---
 name: brainify-inbox
-description: sources/00_inbox/ 의 PDF 들을 Docling+MinerU 듀얼 파싱·요약하고, Claude 가 두 출력의 diff 를 시각 검증한 뒤 PARA 분류·파일명을 제안 → Dr. Ben 승인 → sources/ 정식 위치로 이동 + knowledge/ 동반 노트 생성하는 인터랙티브 스킬. "인박스 브레인화", "PDF 정리해줘", "오늘 들어온 자료 처리", "/brainify-inbox" 류 트리거.
+description: "[SUPERSEDED 2026-05-27 → extract+refine+brainify] 구 단일 통합 스킬. 호출 금지."
 allowed_tools: [bash, read, write, edit]
-status: active
+status: superseded
 ---
 
-# brainify-inbox
+> ⚠️ **SUPERSEDED (2026-05-27).** 이 스킬(Docling+MinerU 듀얼 파싱 → 시각검증 → PARA → 노트, 단일 통합)은 **extract(`2nd-brain-parser`+`parser-drain`) + [[refine]](듀얼파서 정제 → `refined.md`) + [[brainify]](PARA·동반 노트) 3단**으로 분리·대체됐다. **호출하지 말 것.** 이 디렉토리는 *역사적 SDD*(`PROGRESS.md`)·refine 로직 원본으로만 보존(de-list 위해 SKILL 파일은 `SKILL.superseded.md` 로 rename). 현행 진입점: `/brainify`(정제 노트화), `/refine`(듀얼파서 정제).
+
+# brainify-inbox (구 — superseded)
 
 `~/projects/2nd-brain-vault/sources/00_inbox/` staging 폴더의 PDF 자료를 듀얼 엔진 (Docling + MinerU) 으로 로컬 파싱하고, Claude 가 두 출력을 시각 검증한 뒤, PARA 분류·파일명·동반 노트 초안을 Dr. Ben 에게 제안. 승인 후 일괄 이동 + 동반 노트 생성. 외부 API 호출 0 (재무자료 leak 방지).
 
