@@ -29,6 +29,7 @@ helper 는 `python3 ~/.claude/skills/brainify/brainify.py <subcommand>` 로 호�
    첨부의 **정제 markdown**, `identifier`, `via` 를 받는다.
    - (스레드면) **`brainify.py contacts "<item>"`** 도 호출 — `_thread.md` 의 `participants`(gmail-label-actions
      가 gog 로 해석한 이름·이메일·`contact_id`)를 인맥 노트와 매칭해 `matched`(노트 有)/`unmatched`(contact_id 有·노트 無)/`no_contact` 로 분류해 준다. 인맥 반영(§아래)의 입력.
+   - **`_thread.md` 의 `mail_class` 확인** — 포워드 메일은 봉투 참여자가 실제 상대가 아닐 수 있다(§5 포워드 처리). `native`=봉투 그대로, `self-forward`=봉투 비고 본문에 진짜 상대, `other-forward`=봉투는 전달자(인맥)·인용 인물은 참조. 정책 [[project-gmail-forward-3class-policy]].
    - 파싱은 brainify 가 하지 않는다 — extract(parser-drain)+[[refine]] 가 만든 `<원본>_parse/refined.md`
      를 읽는다(`via: refined:<엔진>`). refined.md 가 없으면(파이프라인 미경유 단건) docling 1회 fallback
      (`via: docling`). 즉 **파싱이 끝난 다음부터가 brainify** — 두 파서 비교·보정은 refine 이 이미 끝냄.
@@ -60,6 +61,11 @@ helper 는 `python3 ~/.claude/skills/brainify/brainify.py <subcommand>` 로 호�
    - `held`(동명이인 보류 — 같은 이름 Contact 가 다른 이메일로 존재) → **생성하지 말고 보고**. 주간 감사가
      "기존 인물 새 이메일(병합)" vs "별개 신규" 판단.
    - `no_contact`(Contacts 미등록·동명이인도 아님) → 무시.
+
+   **포워드 메일 처리 (`mail_class`) — 봉투 참여자만으론 부족** ([[project-gmail-forward-3class-policy]]):
+   - `native` → 위 4 버킷 그대로 (봉투 = 실제 인맥).
+   - `self-forward`(내 KIRAMS 포워드) → 봉투 참여자는 *나라서 비어 있음*. **본문 인용 헤더**(`----- Original Message -----From : 이름 <이메일>To :…Cc :…`)에서 **진짜 상대 추출** → 각 이메일을 `gog contacts search <email>` 로 contact_id 해석 → 위 버킷대로(직접 교신자라 unmatched 면 new-person OK).
+   - `other-forward`(남이 포워드+코멘트) → **봉투 전달자 = 1순위 인맥**(위 버킷 그대로 link-event/new-person). 본문 인용 속 인물은 **"via 전달자" 참조만** — 인맥 노트 신설·autocontact ✗, 동반 노트 본문에 `참조: 홍길동 (via [[전달자]])` 로 적고 주간 감사가 승급 판단. 액션(할일/일정/회신)은 **전달자 코멘트(본문 상단)** 기준.
 6. 처리 결과를 표로 보고: 항목 → PARA → 노트 → 인맥(matched 링크 N · 신규 노트 M · held 보류 K) → 플래그.
 
 배치일 때: **첫 1~2건 처리 후 패턴(분류 기준·노트 톤)을 Dr. Ben 에게 한 번 확인**받고
