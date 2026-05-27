@@ -225,6 +225,11 @@ def cmd_commit(args) -> int:
         fm.append(id_field)
     if args.via:
         fm.append(f"parse_via: {args.via}")
+    if args.doc_status and args.doc_status != "final":
+        # 초안·준비·중간본 = source-trail (정본 아님). 확정본만 무표식(=final). 회의록 시리즈 clutter 방지.
+        fm.append(f"doc_status: {args.doc_status}")
+    if args.superseded_by:
+        fm.append(f"superseded_by: \"[[{args.superseded_by}]]\"")
     fm += [
         "para_review: pending",           # 정책: 낙관 배치 → 주간 감사
         f"parse_confidence: {args.confidence or 'ok'}",
@@ -383,6 +388,10 @@ def main(argv=None) -> int:
     pc.add_argument("--date", default="")
     pc.add_argument("--via", default="")
     pc.add_argument("--confidence", default="ok", choices=["ok", "low"])
+    pc.add_argument("--doc-status", dest="doc_status", default="final", choices=["final", "interim"],
+                    help="final=확정본(full 요약·정본) / interim=초안·준비·중간본(source-trail, 요약 생략)")
+    pc.add_argument("--superseded-by", dest="superseded_by", default="",
+                    help="이 중간본을 대체하는 정본 노트 stem (회의록 시리즈)")
     pc.add_argument("--body-file", default="")
     sub.add_parser("audit")
     pcon = sub.add_parser("contacts"); pcon.add_argument("item")

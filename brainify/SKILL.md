@@ -44,13 +44,25 @@ helper 는 `python3 ~/.claude/skills/brainify/brainify.py <subcommand>` 로 호�
      한 줄 요약 → 핵심 내용 → 내 생각 → `[[관련 노트]]` 링크. 관련 노트는
      `grep -ril <키워드> knowledge/` 로 찾아 wikilink.
    - **인맥 링크**: §2 `contacts` 의 `matched` 인물은 본문 `관련 노트`에 `[[<wikilink>]]` 로 건다.
+   - **★ 확정본 vs 중간본 (회의록·문서 시리즈)**: 회의록 등은 *초안→검토→확정* 으로 **여러 번 회람**된다(매번 다른
+     thread 라 thread_id dedup 으로 안 걸러짐). **확정된 것만 knowledge 요약**, 초안·준비·자료 중간본은 *source-trail*
+     로만 보존(요약 생략) — 안 그러면 knowledge 가 미확정본으로 오염된다(2026-05-26 KARP 제2차 실측 문제).
+     1. **시리즈 감지**: `grep -ril "<회의·시리즈 키>" knowledge/` (예 "제2차 의학위원회") 로 기존 정본/형제 노트 탐색.
+     2. **확정본 판정**(아래면 final): 회의 *후* 회람된 **최종 회의록**(제목 "회의록" + 확정/회람), 또는 "확정"·"최종" 명시.
+        → 표준 full 노트(정본). 이전 중간본 정보는 본문 `## 준비 경위` 타임라인에 **1줄씩 흡수**(날짜·핵심·thread 링크).
+        기존 중간본 노트가 있으면 `--superseded-by <이정본>` 로 그쪽을 정본 가리키게(또는 04_archive 이동은 주간 감사).
+     3. **중간본 판정**(초안·검토요청·"회의자료"·v.x·역학추가본 등): **full 요약 만들지 말 것.** raw 는 `sources/` 보존
+        (캡처는 유지) + 동반 노트는 **얇은 source-trail**(첫 줄 원본 링크 + "초안/준비본 — 정본 [[..]]" 1줄) + `--doc-status interim`.
+        정본이 이미 있으면 그 정본 `## 준비 경위` 에 1줄 append(인맥 link-event 와 동일 패턴).
+     4. **모호하면 보수적으로 *중간본***(`--doc-status interim`) + `para_review: pending` → 주간 감사가 정본 승급.
+        (clutter 방지가 유실보다 우선 — raw 는 어차피 보존됨.)
    - 본문은 임시파일(예: `/tmp/brainify-body.md`)에 쓴다.
 4. **commit** — `brainify.py commit "<item>" --para <좌표> --name <slug> --title "<라벨>"
    --tags "t1,t2" --date YYYY-MM-DD --via "<inspect via>" [--confidence low]
-   --body-file /tmp/brainify-body.md`.
+   [--doc-status interim] [--superseded-by <정본 stem>] --body-file /tmp/brainify-body.md`.
    helper 가 원본을 `sources/<para>/<name>/` 로 이동하고, `knowledge/<para>/<name>.md` 에
-   frontmatter(+ `identifier`, `para_review: pending`, `parse_confidence`) + 본문을 쓴 뒤
-   00_inbox 를 비운다.
+   frontmatter(+ `identifier`, `para_review: pending`, `parse_confidence`, [중간본이면 `doc_status: interim`]) + 본문을 쓴 뒤
+   00_inbox 를 비운다. (`--doc-status final` 기본 = 정본·full 요약, 무표식.)
 5. **인맥 반영** (commit 후 — 노트 `<name>` 확정됐으므로): §2 `contacts` 의 4 버킷대로.
    - `matched`(인맥 노트 있음) → `brainify.py link-event "<name>" --contact-id "<contact_id>" --context "<한 줄>"`.
      그 사람 노트 `related_events:` 에 `[[<name>]]` 멱등 추가 → 관계 타임라인 누적.
@@ -80,6 +92,9 @@ helper 는 `python3 ~/.claude/skills/brainify/brainify.py <subcommand>` 로 호�
 - PARA 좌표가 모호 → 묻지 말고 **가장 그럴듯한 좌표로 낙관 배치 + `--confidence` 와 무관하게
   commit**(helper 가 `para_review: pending` 부착). 교정은 주간 감사가.
 - `via: error`/markdown 비정상·refined.md 부재로 듀얼검증 필요 → `--confidence low` 로 commit(유실 0).
+- **회의록·문서 시리즈(확정 vs 중간본, §3-★)**: 확정 여부가 헤드리스로 불확실하면 **보수적으로 `--doc-status interim`**
+  (source-trail, 요약 생략) + `para_review: pending` → 주간 감사가 정본 승급. 무인이 초안을 정본으로 적재해 knowledge
+  오염시키는 것 방지(clutter < 유실, raw 는 보존됨). 명백한 확정본(회의 후 "회의록" 회람·"확정")만 final 요약.
 - **인맥 반영도 그대로 수행** — `contacts` → `matched` 본문 `[[링크]]`+commit 후 `link-event`(멱등);
   `unmatched` → `new-person` 으로 인맥 노트 신설(라벨링이 게이트라 헤드리스도 생성); `held`(동명이인) → 생성 말고 로그/보고만(주간 감사).
 - 배치 "패턴 확인" 스텝 생략 — 인자로 받은 그 1건만 처리하고 끝낸다(턴당 1항목).
@@ -95,7 +110,10 @@ helper 는 `python3 ~/.claude/skills/brainify/brainify.py <subcommand>` 로 호�
    - 좌표 적정 → 노트에서 `para_review:` 줄 제거(또는 `done`).
    - 부적정 → 노트 + `sources/` 원본을 함께 이동하고 `sources:` 경로·플래그 갱신.
    - `parse_confidence: low` → 필요 시 대체 경로(예: GPU MinerU, 재변환)로 재파싱.
-3. 감사 요약 보고: 점검 N건 / 좌표 교정 M건 / 재파싱 K건 / 남은 플래그.
+   - **`doc_status: interim`**(회의록·문서 중간본, §3-★) → 확정본이 나왔으면: 정본 노트가 그 시리즈를 흡수했는지 확인,
+     중간본은 `04_archive/` 이동 또는 정본 `## 준비 경위` 1줄로 강등(source-trail). 잘못 interim 된 *실제 확정본*이면
+     full 요약으로 승급(doc_status 제거). 정본 미도래면 그대로 유지.
+3. 감사 요약 보고: 점검 N건 / 좌표 교정 M건 / 재파싱 K건 / 중간본 정리 J건 / 남은 플래그.
 
 ## 제약
 
