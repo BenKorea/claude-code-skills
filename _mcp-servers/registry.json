@@ -1,0 +1,9 @@
+{
+  "_comment": "MCP server registry — single source of truth for user-scope MCPs across ai4lt + kimbi. Apply via _mcp-servers/apply.sh (called by /git-routine pull). Per-machine prereqs (uvx, Windows Python + 한컴오피스) installed separately; see README §Prereq.",
+  "mcpServers": {
+    "hwp-mcp": {
+      "command": "uvx",
+      "args": ["--from", "hwp-mcp", "hwp-mcp"]
+    }
+  }
+}
