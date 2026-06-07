@@ -35,7 +35,8 @@ helper 는 `python3 ~/.claude/skills/brainify/brainify.py <subcommand>` 로 호�
      (`via: docling`). 즉 **파싱이 끝난 다음부터가 brainify** — 두 파서 비교·보정은 refine 이 이미 끝냄.
    - `via: error` 또는 markdown 이 비정상적으로 짧으면 → commit 시 `--confidence low`.
    - refined.md 가 없고 PDF 가 듀얼 검증이 필요해 보이면 → 먼저 `/refine` 권유(또는 parser-drain 대기).
-   - **★ xlsx 등 데이터 스프레드시트는 `_parse` 생략 (2026-06-07)**: 명단·시트류는 *구조화 데이터 자체가 값* — 동반 노트가 표/로스터로 직접 담으므로 full-text 파싱 가치 낮음. `_parse` 미동반이 정상(없어도 `via: error` 아님), 노트 본문에 표로 정리. (full-text 검색이 꼭 필요할 때만 예외적 docling.)
+   - **★ xlsx 등 데이터 스프레드시트는 docling `_parse` 생략 (2026-06-07)**: 명단·시트류는 *구조화 데이터 자체가 값* — full-text 파싱 가치 낮음. `_parse` 미동반이 정상(없어도 `via: error` 아님).
+     - **파악 경로 = 경량 stdlib 추출** (Read 도구는 xlsx 렌더 못 함 → "그냥 Read" 안 됨): `python3 -c "import zipfile,re; print(re.findall(r'<t[^>]*>([^<]*)</t>', zipfile.ZipFile('<xlsx>').read('xl/sharedStrings.xml').decode('utf-8','ignore')))"` 로 셀 텍스트 즉시 추출(deps·모델·docker 0). 정밀 셀 위치 필요 시만 `xl/worksheets/sheet*.xml` 조인. → 그 내용을 노트 본문 표로 정리.
 3. **판단 (LLM — 여기가 이 스킬의 핵심)**: inspect 결과를 읽고 결정한다.
    - **PARA 좌표**: `01_projects/<폴더>` · `02_areas/<영역>` · `03_resources/<주제>` ·
      `04_archive/...`. 기존 폴더 구조를 먼저 `ls`(또는 scan 의 힌트)로 확인해 재사용.
