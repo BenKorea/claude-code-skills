@@ -48,13 +48,15 @@ def _is_bulk(f: pathlib.Path):
     m = BULK_NAME.search(f.name)
     if m:
         return True, f"이름패턴({m.group()})"
-    mb = f.stat().st_size / 1048576
     if f.suffix.lower() == ".pdf":
         pg = _pdf_pages(f)
-        if pg and pg >= BULK_PAGES:
-            return True, f"{pg}p≥{BULK_PAGES}p"
-        if mb >= BULK_MB:
-            return True, f"{mb:.0f}MB≥{BULK_MB}MB"
+        if pg is not None:                       # 페이지 알려짐 → 페이지가 primary(고해상 스캔 size 무관)
+            if pg >= BULK_PAGES:
+                return True, f"{pg}p≥{BULK_PAGES}p"
+        else:                                    # 페이지 미상 → size fallback
+            mb = f.stat().st_size / 1048576
+            if mb >= BULK_MB:
+                return True, f"{mb:.0f}MB≥{BULK_MB}MB(페이지 미상)"
     return False, ""
 
 

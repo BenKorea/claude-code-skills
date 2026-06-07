@@ -38,7 +38,7 @@ diverge vision 보정·누구 링크)은 이 문서(에이전트), 결정형(gog
 
 3. **_parse 생성** — `backfill.py parse "<폴더>"` (기본 `--engine dual`: pdf=docling+mineru+diff, office=docling). 
    - **xlsx 등 데이터 스프레드시트 docling 제외**(구조화 데이터 자체가 값). 파악은 **경량 stdlib 추출**(Read 도구는 xlsx 미지원): `zipfile` → `xl/sharedStrings.xml` 텍스트(deps·모델 0). docling _parse 불요. → 노트 표로 정리. (brainify SKILL.md §2 권위.)
-   - **★ 방대 reference PDF 자동 제외 (2026-06-07)**: **페이지 ≥ 100 OR 크기 ≥ 20MB OR 이름패턴**(`초록집·자료집·proceedings·abstract·논문집·카탈로그·book`)이면 auto-parse skip — *저가치(수백 초록을 노트화 안 함)·timeout 위험*. 결과 `status: skip(bulk: …)`. → **정본 frontmatter `parse: skipped-bulk (<reason>)`** 표기, PDF 는 보존(검색·열람), **필요 페이지만 on-demand**(`Read` 멀티모달 `pages:"120-122"`, 노트에 "본인 발표=p.XXX" 핀). 정말 전체 필요 시 `--force-bulk`.
+   - **★ 방대 reference PDF 자동 제외 (2026-06-07, 페이지 우선 개정)**: **페이지 ≥ 100(우선 신호) OR 이름패턴**(`초록집·자료집·proceedings·abstract·논문집·카탈로그·book`) OR **(페이지 미상일 때만) 크기 ≥ 20MB** 면 auto-parse skip. ※ size 단독 제외는 *고해상 스캔(예: 600DPI 계약서 56M/14p)을 오발화*하므로 페이지 알려지면 size 무시 — 페이지 낮으면(스캔) 파싱 — *저가치(수백 초록을 노트화 안 함)·timeout 위험*. 결과 `status: skip(bulk: …)`. → **정본 frontmatter `parse: skipped-bulk (<reason>)`** 표기, PDF 는 보존(검색·열람), **필요 페이지만 on-demand**(`Read` 멀티모달 `pages:"120-122"`, 노트에 "본인 발표=p.XXX" 핀). 정말 전체 필요 시 `--force-bulk`.
    - 결과의 `needs_vision_refine: true`(verdict=diverge PDF)인 파일은 **에이전트가 vision 보정**: `refine.py read <_parse>` 로 두 파서 markdown·충돌점 확인 → 원본 PDF 를 `Read`(멀티모달)로 검증 → `refine.py write <_parse> --base-engine <docling|mineru|vision> --correction "..." --body-file ...`. (match/single 은 helper 가 이미 자동 promote.)
    - 정본 노트 frontmatter 갱신: `parse_via: refined:<engine>`, `parse: sources/.../<주원본>_parse/`.
    - 대량(마이그레이션): mineru 가 느리면 `--engine docling`(단일) 로 — refine 가 single 자동 promote. 단 fidelity 는 dual↓.
