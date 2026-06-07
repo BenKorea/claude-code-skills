@@ -104,11 +104,48 @@ def _refined(host_path: pathlib.Path) -> dict | None:
     return {"via": base, "markdown": body}
 
 
+# ── 파싱 제외 정책 (backfill 과 동일 — 권위: backfill SKILL.md/backfill.py) ──
+BULK_PAGES = 100             # 방대 reference PDF auto-parse 제외 임계(페이지)
+BULK_MB = 20                 # 방대 제외 임계(MB)
+BULK_NAME = re.compile(r"(?i)초록집|자료집|proceedings|abstract|논문집|카탈로그|catalog|book")
+
+
+def _pdf_pages(p: pathlib.Path):
+    try:
+        r = subprocess.run(["pdfinfo", str(p)], capture_output=True, text=True, timeout=30)
+        for line in r.stdout.splitlines():
+            if line.startswith("Pages:"):
+                return int(line.split()[1])
+    except Exception:
+        pass
+    return None
+
+
+def _is_bulk(f: pathlib.Path):
+    """방대 reference 판정 → (bool, reason). 이름패턴(전 포맷) OR PDF(페이지≥100 또는 크기≥20MB)."""
+    m = BULK_NAME.search(f.name)
+    if m:
+        return True, f"이름패턴({m.group()})"
+    if f.suffix.lower() == ".pdf":
+        pg = _pdf_pages(f)
+        if pg and pg >= BULK_PAGES:
+            return True, f"{pg}p≥{BULK_PAGES}p"
+        if f.stat().st_size / 1048576 >= BULK_MB:
+            return True, f"{f.stat().st_size/1048576:.0f}MB≥{BULK_MB}MB"
+    return False, ""
+
+
 def _parse(host_path: pathlib.Path) -> dict:
-    """파일 1개 → {via, markdown}. refined.md(refine 산출) 우선, 없으면 2nd-brain-parser docling fallback."""
+    """파일 1개 → {via, markdown}. refined.md(refine 산출) 우선, 없으면 docling fallback.
+    제외(백필 정책): xlsx 데이터=경량 stdlib 추출(docling X), 방대 reference PDF=on-demand page-Read."""
     pre = _refined(host_path)
     if pre is not None:
         return pre
+    if host_path.suffix.lower() in (".xlsx", ".xls"):                 # 데이터 스프레드시트 — docling 불요
+        return {"via": "skipped-xlsx", "markdown": "", "reason": "데이터 스프레드시트(zipfile→sharedStrings 경량 추출로 파악)"}
+    bulk, reason = _is_bulk(host_path)                                # 방대 reference — auto-parse 제외
+    if bulk:
+        return {"via": "skipped-bulk", "markdown": "", "reason": reason}
     cmd = [
         "docker", "run", "--rm", "-u", f"{os.getuid()}:{os.getgid()}",
         "-v", f"{VAULT}:/home/user/projects/2nd-brain-vault",
