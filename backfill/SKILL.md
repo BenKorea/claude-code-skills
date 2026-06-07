@@ -37,7 +37,8 @@ diverge vision 보정·누구 링크)은 이 문서(에이전트), 결정형(gog
    - `backfill.py thread "<폴더>" --thread-id <tid>` → gog fetch + `build_thread_md` → `_thread.md`(참여자 contact_id 해석 포함). gog 는 `.keyring-password` 캐시로 비대화식.
 
 3. **_parse 생성** — `backfill.py parse "<폴더>"` (기본 `--engine dual`: pdf=docling+mineru+diff, office=docling). 
-   - **xlsx 등 데이터 스프레드시트는 자동 제외**(정책 — 노트가 구조화 데이터를 담음).
+   - **xlsx 등 데이터 스프레드시트 자동 제외**(노트가 구조화 데이터를 담음).
+   - **★ 방대 reference PDF 자동 제외 (2026-06-07)**: **페이지 ≥ 100 OR 크기 ≥ 20MB OR 이름패턴**(`초록집·자료집·proceedings·abstract·논문집·카탈로그·book`)이면 auto-parse skip — *저가치(수백 초록을 노트화 안 함)·timeout 위험*. 결과 `status: skip(bulk: …)`. → **정본 frontmatter `parse: skipped-bulk (<reason>)`** 표기, PDF 는 보존(검색·열람), **필요 페이지만 on-demand**(`Read` 멀티모달 `pages:"120-122"`, 노트에 "본인 발표=p.XXX" 핀). 정말 전체 필요 시 `--force-bulk`.
    - 결과의 `needs_vision_refine: true`(verdict=diverge PDF)인 파일은 **에이전트가 vision 보정**: `refine.py read <_parse>` 로 두 파서 markdown·충돌점 확인 → 원본 PDF 를 `Read`(멀티모달)로 검증 → `refine.py write <_parse> --base-engine <docling|mineru|vision> --correction "..." --body-file ...`. (match/single 은 helper 가 이미 자동 promote.)
    - 정본 노트 frontmatter 갱신: `parse_via: refined:<engine>`, `parse: sources/.../<주원본>_parse/`.
    - 대량(마이그레이션): mineru 가 느리면 `--engine docling`(단일) 로 — refine 가 single 자동 promote. 단 fidelity 는 dual↓.

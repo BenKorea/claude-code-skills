@@ -9,11 +9,14 @@
   parse  <folder> [--engine dual|docling]  소스 ephemeral 파싱(_parse) + 비-diverge refine
 재사용: gmail-label-actions/run.py(build_thread_md), brain-pdf(docker), refine.py.
 """
-import os, sys, json, subprocess, pathlib, importlib.util, argparse
+import os, sys, json, re, subprocess, pathlib, importlib.util, argparse
 
 VAULT = pathlib.Path(os.path.expanduser("~/projects/2nd-brain-vault"))
 PARSE_EXT = {".pdf", ".docx", ".doc", ".hwp", ".hwpx", ".pptx", ".ppt"}   # xlsx/xls 제외(정책)
 DATA_EXT = {".xlsx", ".xls"}
+BULK_PAGES = 100             # 방대 reference PDF auto-parse 제외 임계(페이지)
+BULK_MB = 20                 # 방대 제외 임계(MB)
+BULK_NAME = re.compile(r"(?i)초록집|자료집|proceedings|abstract|논문집|카탈로그|catalog|book")  # 전 포맷
 GLA = os.path.expanduser("~/.openclaw/workspace/skills/gmail-label-actions/run.py")
 REFINE = os.path.expanduser("~/.claude/skills/refine/refine.py")
 COMPOSE_DIR = os.path.expanduser("~/projects/2nd-brain/docker/2nd-brain-parser")
@@ -28,19 +31,52 @@ def _src_files(folder: pathlib.Path):
             if f.is_file() and f.suffix.lower() in PARSE_EXT and not f.name.startswith(".")]
 
 
+def _pdf_pages(p: pathlib.Path):
+    try:
+        r = subprocess.run(["pdfinfo", str(p)], capture_output=True, text=True, timeout=30)
+        for line in r.stdout.splitlines():
+            if line.startswith("Pages:"):
+                return int(line.split()[1])
+    except Exception:
+        pass
+    return None
+
+
+def _is_bulk(f: pathlib.Path):
+    """방대 reference 판정 → (bool, reason). 이름패턴(전 포맷) OR PDF(페이지≥100 또는 크기≥20MB).
+    제외 = auto-parse 안 함(저가치·timeout 위험); PDF 보존, 필요 페이지만 on-demand Read."""
+    m = BULK_NAME.search(f.name)
+    if m:
+        return True, f"이름패턴({m.group()})"
+    mb = f.stat().st_size / 1048576
+    if f.suffix.lower() == ".pdf":
+        pg = _pdf_pages(f)
+        if pg and pg >= BULK_PAGES:
+            return True, f"{pg}p≥{BULK_PAGES}p"
+        if mb >= BULK_MB:
+            return True, f"{mb:.0f}MB≥{BULK_MB}MB"
+    return False, ""
+
+
 def cmd_scan(args):
     folder = pathlib.Path(args.folder)
     if not folder.is_dir():
         print(json.dumps({"ok": False, "error": f"폴더 아님: {folder}"}, ensure_ascii=False)); return 1
     srcs = _src_files(folder)
-    need = [f.name for f in srcs if not (folder / (f.name + "_parse")).exists()]
+    need, bulk = [], []
+    for f in srcs:
+        if (folder / (f.name + "_parse")).exists():
+            continue
+        b, reason = _is_bulk(f)
+        (bulk if b else need).append({"file": f.name, "reason": reason} if b else f.name)
     xlsx = [f.name for f in folder.iterdir() if f.suffix.lower() in DATA_EXT]
     print(json.dumps({
         "folder": str(folder.relative_to(VAULT)) if folder.is_relative_to(VAULT) else str(folder),
         "_thread.md": (folder / "_thread.md").exists(),
         "sources": [f.name for f in srcs],
         "need_parse": need,
-        "xlsx_skipped": xlsx,          # 정책상 _parse 불요
+        "bulk_skipped": bulk,          # 방대 reference — auto-parse 제외(정본 parse: skipped-bulk, 필요분 on-demand Read)
+        "xlsx_skipped": xlsx,          # 데이터 스프레드시트 — _parse 불요
     }, ensure_ascii=False, indent=2))
     return 0
 
@@ -91,6 +127,11 @@ def cmd_parse(args):
             sentinel = pdir / ("diff.json" if dual else "docling.json")
             if sentinel.exists():
                 results.append({"file": f.name, "status": "skip(이미)"}); continue
+            bulk, reason = _is_bulk(f)
+            if bulk and not args.force_bulk:                 # 방대 reference → auto-parse 제외
+                results.append({"file": f.name, "status": f"skip(bulk: {reason})",
+                                "hint": "정본 parse: skipped-bulk 표기, 필요 페이지만 Read(멀티모달) on-demand"})
+                continue
             pdir.mkdir(exist_ok=True)
             r = _dexec("brain-pdf", "parse-docling", _cpath(f))
             if r.returncode != 0 or not r.stdout:
@@ -132,6 +173,7 @@ def main():
     pt.add_argument("--force", action="store_true")
     pp = sub.add_parser("parse"); pp.add_argument("folder")
     pp.add_argument("--engine", choices=["dual", "docling"], default="dual")
+    pp.add_argument("--force-bulk", action="store_true", help="방대 reference(초록집 등)도 강제 파싱")
     a = ap.parse_args()
     return {"scan": cmd_scan, "thread": cmd_thread, "parse": cmd_parse}[a.cmd](a)
 
