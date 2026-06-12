@@ -1,7 +1,7 @@
 ---
 name: duty-roster
 description: >-
-  핵의학과 월별 온콜당직표(xlsx)를 읽어 Dr. Ben(변병현)의 당직·판독 일정을 Google Calendar 에
+  핵의학과 월별 온콜당직표(xlsx)를 읽어 Dr. Ben(김병일)의 당직·판독 일정을 Google Calendar 에
   멱등 동기한다. 당직의사명→On Call(08:50–11:00), PET→PET판독(10:00–17:30),
   PET외→감마판독(10:00–17:30), 병동→병동당직(당일08:30~익일08:30). "당직표 캘린더에 넣어줘",
   "이번달 온콜 일정 등록해줘", "/duty-roster" 류 트리거. 매달 재실행 안전(해당 월 마커분 삭제 후 재생성).
@@ -11,7 +11,7 @@ allowed_tools: [bash, read]
 # duty-roster — 월별 온콜당직표 → Google Calendar
 
 핵의학과 **월별 온콜당직 및 업무분장표**(`YYYY년_M월_핵의학과_온콜당직표_*.xlsx`)에서
-**변병현(=Dr. Ben)** 에게 배정된 칸만 뽑아 캘린더 이벤트로 만든다. 매달 새 표가 오므로
+**김병일(=Dr. Ben)** 에게 배정된 칸만 뽑아 캘린더 이벤트로 만든다. 매달 새 표가 오므로
 **멱등 재실행**(해당 월 마커분을 지우고 다시 만듦)이 핵심 — 표가 수정·재발송돼도 다시 돌리면 정합.
 
 - **결정형 메커니즘은 `roster.py`** (xlsx 파싱·날짜변환·gog 동기)에 위임. 외부 의존성 0
@@ -30,7 +30,7 @@ helper: `python3 ~/.claude/skills/duty-roster/roster.py <plan|sync> <xlsx> [opts
 | `병동`       | 병동당직  | 당일 08:30 ~ 익일 08:30 |
 
 - 날짜 = `당직일자` 열(Excel serial). 한 사람이 하루 여러 업무에 배정될 수 있어 칸마다 별도 이벤트.
-- 본인 이름 기본값 `변병현` (`roster.py` 의 `DEFAULT_NAME`). 바뀌면 거기만 수정.
+- 본인 이름 기본값 `김병일` (`roster.py` 의 `DEFAULT_NAME`). 바뀌면 거기만 수정.
 - 계정 기본값 `kimbi.kirams@gmail.com` primary. gog keyring → `GOG_KEYRING_PASSWORD`
   (없으면 `~/.config/gogcli/.keyring-password` 자동 로드, [[reference_gog_keyring_password]]).
 
@@ -83,7 +83,7 @@ gog calendar list primary -a kimbi.kirams@gmail.com \
 ## 정책·주의
 
 - **알림(reminder) 없음** — 캘린더 계정 기본값만(2026-06-08 Dr. Ben 결정).
-- **다른 의사 일정은 안 만든다** — 본인(변병현) 칸만. 과 전체 표지만 캘린더는 개인 일정.
+- **다른 의사 일정은 안 만든다** — 본인(김병일) 칸만. 과 전체 표지만 캘린더는 개인 일정.
 - **기존 일반 반복 일정과의 충돌**: 2026-06 최초 도입 시 캘린더에 부정확한 *매주 월요일 PET판독*
   반복 series 가 있어 1회성으로 삭제했다(당직표 실제 배정과 불일치). 이건 **스킬의 매달 동작이 아니라
   1회 정리** — 새 달엔 그 series 가 없으므로 sync 는 순수 당직표→캘린더만 한다. 비슷한 일반 반복이
