@@ -4,6 +4,10 @@
     "hwp-mcp": {
       "command": "uvx",
       "args": ["--from", "hwp-mcp", "hwp-mcp"]
+    },
+    "legalize-mcp": {
+      "command": "uvx",
+      "args": ["--from", "legalize-cli[mcp]", "legalize-mcp"]
     }
   }
 }
