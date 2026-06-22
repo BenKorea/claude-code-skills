@@ -114,7 +114,9 @@ def _cpath(p: pathlib.Path):
 def cmd_parse(args):
     """폴더 소스 ephemeral 파싱: docling[+mineru+diff(pdf,dual)] → 비-diverge 자동 refine.
     diverge PDF 는 refined.md 미작성 → SKILL.md(에이전트)가 vision 보정. 멱등(sentinel 존재 skip)."""
-    folder = pathlib.Path(args.folder); srcs = _src_files(folder)
+    folder = pathlib.Path(args.folder)
+    if not folder.is_absolute(): folder = VAULT / folder   # vault-root 상대경로 허용 (glob·_cpath relative_to 안전; scan/thread 와 호출 비대칭 제거)
+    srcs = _src_files(folder)
     if not srcs:
         print(json.dumps({"ok": True, "note": "파싱대상 없음(xlsx 등 제외)"}, ensure_ascii=False)); return 0
     env = dict(os.environ, SB_DATA=str(VAULT))
