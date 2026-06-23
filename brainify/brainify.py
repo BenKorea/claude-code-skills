@@ -366,14 +366,29 @@ def cmd_new_person(args) -> int:
     rel = [f'  - "[[{args.event}]] — {args.context}"'] if args.event else []
     fm = ["---", f"title: {name}", f'aliases: ["{name}"]',
           f"google_contact_id: {args.contact_id or ''}",
+          "contacts_display_name:",                         # [7] 외부=조직_성명_보직 / 내부동료=부서_성명_보직
           f"email: {args.email or ''}", f"organization: {args.org or ''}",
-          f"first_encounter: {args.date or ''}", "relationship_tags: []",
+          "affiliation_scope:",                             # internal(내 기관 동료) | external
+          "department:",                                    # internal 일 때 표시명에 쓰는 부서 (예: 핵의학과)
+          "title_role:", "secondary_roles: []",
+          f"first_encounter: {args.date or ''}",
+          "first_encounter_basis:",                         # met|email|calendar|estimated
+          "gcontacts_first_registered:",                    # Google Contacts custom Sys_First_Registered 미러
+          "last_interaction:", "last_role_change:",
+          "career_history_in_body: false",
+          "gtask_parent_id:",                               # 이 인물 전용 부모 Task ID (계층 루트)
+          "is_academic: false", "zotero:", "photo: none",
+          "relationship_tags: []",
           "related_events:" if rel else "related_events: []", *rel,
-          "tags: [인맥]", "---", "",
-          "## 첫 만남 맥락", "",
+          "tags: [인맥]", "gcontacts_sync: pending", "---", "",
+          "## 한 줄 소개", "",
           f"(brainify 자동 등록 — {args.event or '메일'} 에서 신원 포착. 맥락은 추후 보강)", "",
+          "## 첫 만남 맥락", "", "-", "",
+          "## 교류 이력", "", "-", "",
           "## 대화 핵심", "", "-", "",
           "## 상대 관심사 / 내가 알게 된 것", "", "-", "",
+          "## Career Timeline", "",
+          "- [career_history:: (period:: YYYY-MM~) | (org:: [[기관]]) | (role:: 직책)]", "",
           "## 관련 노트", "", "-", ""]
     note.write_text("\n".join(fm) + "\n", encoding="utf-8")
     print(json.dumps({"ok": True, "note": str(note.relative_to(VAULT)), "created": True}, ensure_ascii=False))
