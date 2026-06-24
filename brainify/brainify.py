@@ -280,16 +280,25 @@ def cmd_commit(args) -> int:
     return 0
 
 
-def cmd_audit(_args) -> int:
-    """플래그된 노트 나열 (주간 감사 대상)."""
+def cmd_audit(args) -> int:
+    """플래그된 노트 나열 (주간 감사 대상). para_review:pending / parse_confidence:low / gcontacts_review:flagged.
+    --inmaek-only = 인맥 잠정(gcontacts_review) 만 (금요일 인맥 브리핑 입력)."""
     flagged: list[dict] = []
-    if KNOWLEDGE.exists():
-        for md in KNOWLEDGE.rglob("*.md"):
+    review_only = getattr(args, "inmaek_only", False)
+    roots = [INMAEK] if review_only else ([KNOWLEDGE] if KNOWLEDGE.exists() else [])
+    for root in roots:
+        for md in root.rglob("*.md"):
             fm = _front(md)
-            if fm.get("para_review") == "pending" or fm.get("parse_confidence") == "low":
+            gr = fm.get("gcontacts_review", "")
+            is_review = gr.startswith("flagged")
+            if review_only and not is_review:
+                continue
+            if (fm.get("para_review") == "pending" or fm.get("parse_confidence") == "low" or is_review):
                 flagged.append({"note": str(md.relative_to(VAULT)),
                                 "para_review": fm.get("para_review", ""),
                                 "parse_confidence": fm.get("parse_confidence", ""),
+                                "gcontacts_review": gr,
+                                "title": fm.get("title", ""),
                                 "sources": fm.get("sources", "")})
     print(json.dumps({"count": len(flagged), "flagged": flagged}, ensure_ascii=False, indent=2))
     return 0
@@ -331,32 +340,78 @@ def _person_by_contact(contact_id: str) -> pathlib.Path | None:
         return None
 
 
+# ── 자동 트랙 생성 게이트 (2026-06-23 결정: 역할/도메인 신호 있으면 잠정 생성·금요일 프루닝) ──
+# 참여자 이름에 박힌 직책/역할 (academic·org). honorific '님' 무시.
+ROLE_RE = re.compile(r"교수|부교수|조교수|박사|위원장|부위원장|위원|이사장|이사|부회장|회장|총무|감사|"
+                     r"실장|부장|본부장|처장|원장|국장|과장|팀장|전문위원|연구위원|연구원|센터장|소장|"
+                     r"대표|차장|사무국장|의장|간사|교사")
+GENERIC_DOMAINS = {"gmail.com", "naver.com", "hanmail.net", "daum.net", "kakao.com", "nate.com",
+                   "outlook.com", "hotmail.com", "yahoo.com", "icloud.com", "me.com"}
+EXCLUDE_LOCAL = re.compile(r"^(noreply|no-reply|donotreply|do-not-reply|mailer-daemon|postmaster|"
+                           r"webmaster|admin|master|system|automail|auto|info|news|newsletter)$", re.I)
+
+
+def _gate_signal(p: dict) -> dict:
+    """자동 생성 게이트 신호 (결정형). qualifies=True 면 brainify 가 잠정 인맥 생성 대상으로 표시.
+    실제 생성 판단·필드 추론은 SKILL.md(LLM)·new-person --review. 여기선 신호만 노출."""
+    name = p.get("name", "") or ""
+    email = (p.get("email", "") or "").lower().strip()
+    local, _, domain = email.partition("@")
+    role = ROLE_RE.search(name)
+    institutional = bool(domain) and domain not in GENERIC_DOMAINS
+    excluded = (not email) or bool(EXCLUDE_LOCAL.match(local))
+    return {"role": role.group(0) if role else "", "domain": domain,
+            "institutional": institutional, "excluded": excluded,
+            "qualifies": (bool(role) or institutional) and not excluded}
+
+
 def cmd_contacts(args) -> int:
     """_thread.md participants → 인맥 매칭. matched(노트 有: 링크·related_events)/unmatched(contact_id 有·노트 無:
-    new-person 신설 대상)/held(동명이인 보류: 주간검토)/no_contact(Contacts 미등록·무관)."""
+    게이트 통과 시 잠정 생성)/held(동명이인 보류: 주간검토)/no_contact(Contacts 미등록·무관).
+    unmatched·no_contact 에 `signal`(게이트) 부착 — SKILL.md 가 qualifies 인 것만 new-person --review."""
     item = INBOX / args.item
     matched, unmatched, held, no_contact = [], [], [], []
     for p in _participants(item):
         cid = p.get("contact_id")
         if cid:
             note = _person_by_contact(cid)
-            (matched if note else unmatched).append(
-                {**p, "note": str(note.relative_to(VAULT)), "wikilink": note.stem} if note else p)
+            if note:
+                matched.append({**p, "note": str(note.relative_to(VAULT)), "wikilink": note.stem})
+            else:
+                unmatched.append({**p, "signal": _gate_signal(p)})
         elif str(p.get("autocontact", "")).startswith("hold"):
             held.append(p)
         else:
-            no_contact.append(p)
+            no_contact.append({**p, "signal": _gate_signal(p)})
     print(json.dumps({"item": args.item, "matched": matched, "unmatched": unmatched,
                       "held": held, "no_contact": no_contact}, ensure_ascii=False, indent=2))
     return 0
 
 
+def _person_by_email(email: str) -> pathlib.Path | None:
+    """email 로 인맥 노트 찾기 — contact_id 없는 신규 인물의 멱등 키 (재실행 중복 생성 차단)."""
+    email = (email or "").strip()
+    if not email or not INMAEK.exists():
+        return None
+    try:
+        r = subprocess.run(["grep", "-ril", f"email: {email}", str(INMAEK)],
+                           capture_output=True, text=True, timeout=20)
+        hits = [l for l in r.stdout.splitlines() if l.strip()]
+        return pathlib.Path(hits[0]) if hits else None
+    except Exception:
+        return None
+
+
 def cmd_new_person(args) -> int:
-    """인맥 노트 신설 (auto-created/unmatched contact_id 용). google_contact_id 로 멱등 — 이미 있으면 skip."""
+    """인맥 노트 신설 (auto-created/unmatched 용). 멱등 키 = google_contact_id ▸ email (없으면 slug)."""
     if args.contact_id:
         exist = _person_by_contact(args.contact_id)
         if exist:
-            print(json.dumps({"ok": True, "skipped": "이미 있음", "note": str(exist.relative_to(VAULT))}, ensure_ascii=False)); return 0
+            print(json.dumps({"ok": True, "skipped": "이미 있음(contact_id)", "note": str(exist.relative_to(VAULT))}, ensure_ascii=False)); return 0
+    if args.email:                                           # contact_id 없는 신규 인물 멱등
+        exist = _person_by_email(args.email)
+        if exist:
+            print(json.dumps({"ok": True, "skipped": "이미 있음(email)", "note": str(exist.relative_to(VAULT))}, ensure_ascii=False)); return 0
     name = (args.name or "").strip() or (args.email or "person").split("@")[0]
     slug = _slug(name)
     note = INMAEK / f"{slug}.md"
@@ -364,13 +419,17 @@ def cmd_new_person(args) -> int:
         note = INMAEK / f"{slug}_{(args.email or '').split('@')[0]}.md"
     note.parent.mkdir(parents=True, exist_ok=True)
     rel = [f'  - "[[{args.event}]] — {args.context}"'] if args.event else []
+    review = (args.review or "").strip()                    # 비면 정식, 값 있으면 잠정(flagged)+사유
+    intro = (f"(brainify 자동 등록 [잠정·금요일 검토 대상: {review}] — {args.event or '메일'} 에서 신원 포착. "
+             f"실제 관계인지·필드는 검토 후 확정)") if review else \
+            f"(brainify 자동 등록 — {args.event or '메일'} 에서 신원 포착. 맥락은 추후 보강)"
     fm = ["---", f"title: {name}", f'aliases: ["{name}"]',
           f"google_contact_id: {args.contact_id or ''}",
           "contacts_display_name:",                         # [7] 외부=조직_성명_보직 / 내부동료=부서_성명_보직
           f"email: {args.email or ''}", f"organization: {args.org or ''}",
           "affiliation_scope:",                             # internal(내 기관 동료) | external
           "department:",                                    # internal 일 때 표시명에 쓰는 부서 (예: 핵의학과)
-          "title_role:", "secondary_roles: []",
+          f"title_role: {args.title_role or ''}", "secondary_roles: []",
           f"first_encounter: {args.date or ''}",
           "first_encounter_basis:",                         # met|email|calendar|estimated
           "gcontacts_first_registered:",                    # Google Contacts custom Sys_First_Registered 미러
@@ -380,9 +439,10 @@ def cmd_new_person(args) -> int:
           "is_academic: false", "zotero:", "photo: none",
           "relationship_tags: []",
           "related_events:" if rel else "related_events: []", *rel,
-          "tags: [인맥]", "gcontacts_sync: pending", "---", "",
-          "## 한 줄 소개", "",
-          f"(brainify 자동 등록 — {args.event or '메일'} 에서 신원 포착. 맥락은 추후 보강)", "",
+          "tags: [인맥]", "gcontacts_sync: pending",
+          f"gcontacts_review: flagged ({review})" if review else "gcontacts_review:",   # 자동 생성 잠정 마커 → 금요일 브리핑
+          "---", "",
+          "## 한 줄 소개", "", intro, "",
           "## 첫 만남 맥락", "", "-", "",
           "## 교류 이력", "", "-", "",
           "## 대화 핵심", "", "-", "",
@@ -446,7 +506,9 @@ def main(argv=None) -> int:
     pc.add_argument("--superseded-by", dest="superseded_by", default="",
                     help="이 중간본을 대체하는 정본 노트 stem (회의록 시리즈)")
     pc.add_argument("--body-file", default="")
-    sub.add_parser("audit")
+    pau = sub.add_parser("audit")
+    pau.add_argument("--inmaek-only", dest="inmaek_only", action="store_true",
+                     help="인맥 잠정(gcontacts_review: flagged) 만 — 금요일 인맥 브리핑 입력")
     pcon = sub.add_parser("contacts"); pcon.add_argument("item")
     ple = sub.add_parser("link-event")
     ple.add_argument("event", help="이벤트 노트 stem (= 동반 노트 --name)")
@@ -458,9 +520,11 @@ def main(argv=None) -> int:
     pnp.add_argument("--email", default="")
     pnp.add_argument("--contact-id", dest="contact_id", default="")
     pnp.add_argument("--org", default="")
+    pnp.add_argument("--title-role", dest="title_role", default="", help="직책 (이름에서 추론한 역할 등)")
     pnp.add_argument("--date", default="")
     pnp.add_argument("--event", default="", help="첫 연결 이벤트 노트 stem")
     pnp.add_argument("--context", default="", help="related_events 한 줄 맥락")
+    pnp.add_argument("--review", default="", help="잠정 마커 사유 (자동 트랙 생성 시) — 값 있으면 gcontacts_review: flagged + 금요일 검토")
     args = ap.parse_args(argv)
     return {"scan": cmd_scan, "inspect": cmd_inspect, "commit": cmd_commit, "audit": cmd_audit,
             "contacts": cmd_contacts, "link-event": cmd_link_event, "new-person": cmd_new_person}[args.cmd](args)

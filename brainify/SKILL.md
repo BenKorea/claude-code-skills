@@ -91,25 +91,27 @@ helper 는 `python3 ~/.claude/skills/brainify/brainify.py <subcommand>` 로 호�
    helper 가 원본을 `sources/<para>/<name>/` 로 이동하고, `knowledge/<para>/<name>.md` 에
    frontmatter(+ `identifier`, `para_review: pending`, `parse_confidence`, [중간본이면 `doc_status: interim`]) + 본문을 쓴 뒤
    00_inbox 를 비운다. (`--doc-status final` 기본 = 정본·full 요약, 무표식.)
-5. **인맥 반영** (commit 후 — 노트 `<name>` 확정됐으므로): §2 `contacts` 의 버킷대로.
-   > **2계층 모델 (2026-06-23 결정)**: *디렉토리*(이름·이메일·소속·전화)는 **Google Contacts**(수천 규모 OK·폰 동기·autocontact 가 채움),
-   > *관계 지식 노트*(`02_areas/인맥/*.md`, 7섹션 CRM)는 **승격된 관계만**(수십~수백 유지). **brainify 는 인맥 `.md` 노트를 자동 신설하지 않는다** — 링크·보고만.
-   > 노트 자동생성이 폭증 벡터였음(라벨 스레드 1건의 CC 전원이 빈 stub → 의미 있는 소수가 묻힘). 노트 신설 = *승격* = 수동/주간 감사 전용.
-   - `matched`(인맥 노트 있음) → `brainify.py link-event "<name>" --contact-id "<contact_id>" --context "<한 줄>"`.
-     그 사람 노트 `related_events:` 에 `[[<name>]]` 멱등 추가 → 관계 타임라인 누적. (본문 `관련 노트`에도 `[[wikilink]]`.)
-   - `unmatched`(contact_id 있는데 인맥 노트 없음 — Google Contacts 디렉토리엔 있으나 `.md` 미승격) →
-     **노트 신설하지 않음**. 참여 사실은 `_thread.md` participants 에 이미 보존(이벤트↔인물 그래프 유지). 결과 보고에
-     **"신규 디렉토리 contact(미승격): <name> <email>"** 로 *나열만* → Dr. Ben/주간 감사가 *실제 관계가 쌓인 사람만* 수동 승격
-     (`brainify.py new-person --name "<name>" --email "<email>" --contact-id "<cid>" --event "<name>" --context "<한 줄>"`).
-   - `held`(동명이인 보류 — 같은 이름 Contact 가 다른 이메일로 존재) → **신설·승격하지 말고 보고**. 주간 감사가
-     "기존 인물 새 이메일(병합)" vs "별개 신규" 판단.
-   - `no_contact`(Contacts 미등록·동명이인도 아님) → 무시.
+5. **인맥 반영** (commit 후 — 노트 `<name>` 확정됐으므로): §2 `contacts` 의 버킷대로. **이게 인맥 업데이트의 *자동 트리거*** (다른 하나 = Dr. Ben 수동 지정 → contacts_sync, 아래 §인맥 업데이트 2-트리거).
+   > **2계층 모델 (2026-06-23 결정 · 2026-06-23 자동생성 게이트로 개정)**: *디렉토리*(이름·이메일·소속·전화)는 **Google Contacts**(수천 규모 OK·폰 동기),
+   > *관계 지식 노트*(`02_areas/인맥/*.md`, 7섹션 CRM)는 **의미 있는 관계만**(수십~수백). 종전엔 "brainify 가 `.md` 자동 신설 ✗·승격은 수동 전용"이었으나,
+   > Dr. Ben 결정으로 **자동 트랙도 신규 인맥을 만들되 — *생성 게이트* 통과분만 *잠정(`gcontacts_review: flagged`)* 으로 — 금요일 브리핑에서 사람이 확정/강등**한다.
+   > 폭증은 *금지*가 아니라 *잠정 마커 + 금요일 프루닝*으로 흡수(낙관 배치 + 플래그 정책의 인맥판). 멱등 — 재실행해도 중복 생성/갱신 없음.
+   - **`matched`**(인맥 노트 있음): ① 본문 `관련 노트`에 `[[wikilink]]`. ② `brainify.py link-event "<name>" --contact-id "<contact_id>" --context "<한 줄>"` (related_events 멱등 누적).
+     ③ **per-field 추론 갱신** — 메일에서 드러난 정보(직책 변경·새 이메일·소속 변경 등)를 노트 frontmatter/`## 교류 이력`과 *필드별로 비교*해 **차이가 있으면** 갱신.
+        기계적 덮어쓰기 ✗ — **출처 신뢰도(provenance) 우선**: 기존 값이 Dr. Ben 수동 입력/고신뢰인데 새 정보가 약하면 *덮어쓰지 말고* `gcontacts_review: flagged (필드 충돌: …)` 로 플래그. 메모(교류이력)는 비교 대상 아님(append; `(날짜+이벤트)` 멱등).
+     ④ 갱신했으면(그리고 노트에 `gcontacts_review` flag 가 *없으면*=확정 관계) `python3 ~/.claude/skills/brainify/contacts_sync.py sync "<인맥노트 stem>" --apply` 로 Google Contact 동기(멱등·무변경이면 no-op).
+   - **`unmatched`**(contact_id 有·노트 無) / **`no_contact`**(contact_id 도 無=완전 신규) — 각 항목의 `signal.qualifies` 로 분기:
+     - **`qualifies: true`**(역할 박힘 또는 기관 도메인, 시스템주소 아님) → **잠정 노트 생성 (vault 만)**:
+       `brainify.py new-person --name "<이름(역할 honorific 제거)>" --email "<email>" [--contact-id "<cid>"] --title-role "<이름에서 추론한 직책>" --org "<도메인/이름 추론 소속>" --event "<name>" --context "<한 줄>" --review "<게이트 사유, 예: 역할=교수·이사회 참여>"`.
+       → `gcontacts_review: flagged` 잠정 노트. 멱등 키 = contact_id ▸ email(재실행 skip). **contacts_sync 는 호출하지 않는다** — 미확정 인물을 live Google Contacts 에 밀어넣지 않음. 금요일 브리핑에서 Dr. Ben 이 확정하면 그때 flag 제거 + `contacts_sync --apply`(강등이면 노트 삭제).
+     - **`qualifies: false`**(무역할 + generic 도메인, 또는 시스템주소) → **생성하지 않음**. 결과 보고에 "후보 풀(미생성): <name> <email>" 나열만 → 금요일/감사가 필요 시 수동 승격.
+   - **`held`**(동명이인 보류 — 같은 이름 Contact 가 다른 이메일) → **생성·승격 ✗·보고만**. 주간 감사가 "기존 인물 새 이메일(병합)" vs "별개 신규" 판단.
 
    **포워드 메일 처리 (`mail_class`) — 봉투 참여자만으론 부족** ([[project-gmail-forward-3class-policy]]):
    - `native` → 위 4 버킷 그대로 (봉투 = 실제 인맥).
-   - `self-forward`(내 KIRAMS 포워드) → 봉투 참여자는 *나라서 비어 있음*. **본문 인용 헤더**(`----- Original Message -----From : 이름 <이메일>To :…Cc :…`)에서 **진짜 상대 추출** → 각 이메일을 `gog contacts search <email>` 로 contact_id 해석 → 위 버킷대로(직접 교신자라도 **노트 자동신설 ✗** — matched 면 link-event, unmatched 면 보고만 → 승격은 수동/감사).
-   - `other-forward`(남이 포워드+코멘트) → **봉투 전달자 = 1순위 인맥**(위 버킷 그대로 — matched=link-event, unmatched=보고만, **노트 자동신설 ✗**). 본문 인용 속 인물은 **"via 전달자" 참조만** — 인맥 노트 신설·autocontact ✗, 동반 노트 본문에 `참조: 홍길동 (via [[전달자]])` 로 적고 주간 감사가 승급 판단. 액션(할일/일정/회신)은 **전달자 코멘트(본문 상단)** 기준.
-6. 처리 결과를 표로 보고: 항목 → PARA → 노트 → 인맥(matched 링크 N · 신규 노트 M · held 보류 K) → 플래그.
+   - `self-forward`(내 KIRAMS 포워드) → 봉투 참여자는 *나라서 비어 있음*. **본문 인용 헤더**(`----- Original Message -----From : 이름 <이메일>To :…Cc :…`)에서 **진짜 상대 추출** → 각 이메일을 `gog contacts search <email>` 로 contact_id 해석 → 위 버킷대로(matched=link-event+per-field 갱신, unmatched/no_contact 는 게이트 통과 시 잠정 생성).
+   - `other-forward`(남이 포워드+코멘트) → **봉투 전달자 = 1순위 인맥**(위 버킷 그대로). 본문 인용 속 인물은 **"via 전달자" 참조만** — 게이트 자동생성 대상에서 제외(전달자를 거친 간접 등장이라 신호 약함), 동반 노트 본문에 `참조: 홍길동 (via [[전달자]])` 로 적고 금요일/감사가 승급 판단. 액션(할일/일정/회신)은 **전달자 코멘트(본문 상단)** 기준.
+6. 처리 결과를 표로 보고: 항목 → PARA → 노트 → 인맥(matched 갱신 N · 잠정생성 M · 후보풀 P · held K) → 플래그(`gcontacts_review` 포함).
 
 배치일 때: **첫 1~2건 처리 후 패턴(분류 기준·노트 톤)을 Dr. Ben 에게 한 번 확인**받고
 나머지를 일괄 진행 (CLAUDE.md 배치 규칙).
@@ -126,9 +128,11 @@ helper 는 `python3 ~/.claude/skills/brainify/brainify.py <subcommand>` 로 호�
 - **회의록·문서 시리즈(확정 vs 중간본, §3-★)**: 확정 여부가 헤드리스로 불확실하면 **보수적으로 `--doc-status interim`**
   (source-trail, 요약 생략) + `para_review: pending` → 주간 감사가 정본 승급. 무인이 초안을 정본으로 적재해 knowledge
   오염시키는 것 방지(clutter < 유실, raw 는 보존됨). 명백한 확정본(회의 후 "회의록" 회람·"확정")만 final 요약.
-- **인맥 반영도 그대로 수행** — `contacts` → `matched` 본문 `[[링크]]`+commit 후 `link-event`(멱등);
-  `unmatched` → **노트 신설 안 함**(2계층: 디렉토리는 Google Contacts, `.md` 는 승격만) — 로그/보고에 "신규 디렉토리 contact(미승격)" 나열;
-  `held`(동명이인) → 로그/보고만(주간 감사). (헤드리스는 *승격을 절대 자동 수행하지 않는다* — 승격은 Dr. Ben/감사 전용.)
+- **인맥 반영도 그대로 수행 (자동 트랙·무인)** — `matched` → 본문 `[[링크]]` + `link-event`(멱등) + per-field 추론 갱신
+  (provenance 충돌 시 *묻지 말고* `gcontacts_review: flagged (필드 충돌:…)`) + 확정노트면 `contacts_sync --apply`;
+  `qualifies: true` unmatched/no_contact → `new-person --review`(잠정·vault 만, contacts_sync ✗ — 미확정은 디렉토리 미푸시);
+  `qualifies: false` → 후보 풀 로그만; `held`(동명이인) → 로그만. (헤드리스도 잠정 생성은 하되 — 결정형 게이트 + vault-only 라 안전 —
+  *확정/강등은 절대 자동 ✗*, 금요일 브리핑이 Dr. Ben 확정 전용.)
 - 배치 "패턴 확인" 스텝 생략 — 인자로 받은 그 1건만 처리하고 끝낸다(턴당 1항목).
 
 근거: [자동 우선·주간 감사 정책](../../../../projects/2nd-brain-vault/knowledge/02_areas/brain-system/automation-review-policy.md)
@@ -151,11 +155,32 @@ helper 는 `python3 ~/.claude/skills/brainify/brainify.py <subcommand>` 로 호�
      제안 경로가 부적절하면 적정 경로로 교정 후 이동.
 3. **신규 폴더 대장 검토** — `02_areas/brain-system/folder-creation-ledger.md` 의 *지난 7일 신규 항목*을 Dr. Ben 과 함께 점검:
    오생성·중복(유사명 기존 폴더와 갈림)·잘못된 조직 위치(최상위 vs `조직/`)를 교정. 검토 끝난 줄은 `✓` 표시.
-4. **인맥 승격 검토 (2계층)** — 지난 7일 `_thread.md` 들의 `unmatched`(Google Contacts 디렉토리엔 있으나 `.md` 미승격) 인물을
-   모아 Dr. Ben 과 함께 본다. *실제 관계가 쌓인 사람만*(직접 교신·반복 등장·회의 핵심 참석) → `brainify.py new-person …` 로
-   인맥 노트 승격. 단순 1회 CC·무관 수신자는 디렉토리(Google Contacts)에만 두고 승격 안 함. `held`(동명이인)는 병합/신규 판단.
-   → 폴더 폭증 없이 의미 있는 관계만 `.md` 로 자란다. (디렉토리 자체는 autocontact 가 Google Contacts 에 이미 채워 둠.)
-5. 감사 요약 보고: 점검 N건 / 좌표 교정 M건 / 재파싱 K건 / 중간본 정리 J건 / 신규 하위폴더 생성 P건 / 인맥 승격 Q건 / 남은 플래그.
+4. **인맥 잠정 확정/강등 (자동 트랙 산출 검토)** — `brainify.py audit --inmaek-only` 로 `gcontacts_review: flagged` 잠정 노트를 모아
+   Dr. Ben 과 함께 본다(금요일 텔레그램 브리핑이 *읽기전용*으로 같은 목록을 미리 보여줌 — 여기 audit 가 *실제 처리*):
+   - **확정**(실제 관계·맞는 신원) → 노트 frontmatter `gcontacts_review:` 줄 제거 + 필요 시 필드 보강(표시명·부서·전공 enrichment) →
+     `contacts_sync.py sync "<stem>" --apply` 로 Google Contacts 동기(이제부터 디렉토리에도 산다).
+   - **강등**(무관·오인·중복) → 노트 삭제(또는 `04_archive`). 멱등 키(email/contact_id)가 있어 재유입돼도 동일 결정 재현.
+   - **필드 충돌 flag**(`flagged (필드 충돌:…)`) → 어느 값이 옳은지 판단해 노트 갱신 + flag 제거 + 동기.
+   - `held`(동명이인)는 병합/신규 판단. → 폭증분은 여기서 프루닝돼 의미 있는 관계만 확정 `.md` 로 남는다.
+5. 감사 요약 보고: 점검 N건 / 좌표 교정 M건 / 재파싱 K건 / 중간본 정리 J건 / 신규 하위폴더 생성 P건 / 인맥 확정 Q건·강등 R건 / 남은 플래그.
+
+## 인맥 업데이트 — 2 트리거 (멱등) (2026-06-23 결정)
+
+인맥(`02_areas/인맥/*.md` ↔ Google Contacts)은 **두 트리거**로만 갱신되며 **둘 다 멱등**(재실행 = 고정점, 중복 생성/갱신 없음):
+
+1. **자동 트랙 — 메일 브레인화 중** (위 모드1 §5, 헤드리스 포함). *논블로킹*: 모르면 비워두고, 애매하면 `gcontacts_review: flagged` 로
+   체크해 **금요일 14시 텔레그램 읽기전용 브리핑**에 올린다(절대 멈춰 묻지 않음). 생성 게이트(`signal.qualifies`) 통과분만 잠정 생성,
+   per-field 추론 갱신은 provenance 우선(수동값 안 덮음). 확정노트만 `contacts_sync --apply`.
+2. **수동 트랙 — Dr. Ben 이 한 인물 지정** (인터랙티브). *블로킹 허용*: 자료가 모자라면 **Dr. Ben 에게 물어** 채운다.
+   - 흐름: `python3 ~/.claude/skills/brainify/contacts_sync.py sync "<인맥노트 stem 또는 경로>"` (preview·쓰기 0) →
+     출력의 `plan`(create|update|noop)·`desired`(만들 Person JSON)·`missing_required`(빈 필수필드) 확인 →
+     `missing_required` 있으면 **그 필드를 Dr. Ben 에게 질문**해 노트 frontmatter 채움(권위=vault 노트) →
+     다시 preview 로 확인 → 승인 후 `--apply` 로 Google Contact 동기(R1 update / R3 create→update 2단계 자동).
+   - 권위 = **vault 노트**(frontmatter + `## 교류 이력`), Google Contact 은 거울. contacts_sync 는 vault→Contact 단방향 projection.
+   - ⚠️ `--apply` 는 비가역·대외(Google Contacts 실제 수정). `gog -n`(dry-run) 은 update 에서 *실제 적용되는 버그*라 **절대 사용 금지** — preview 는 contacts_sync 자체 기능(쓰기 0)을 쓴다.
+   - 미구현(후속): enrich(R5 학자 전공·부서 웹검색 — LLM 이 노트에 추론 기입 후 sync), photo(R7 updateContactPhoto).
+
+> contacts_sync.py 의 동기 레시피·함정(etag·unstructuredName·create 2단계)의 자족 스펙 = `handoff/2026-06-23_인맥-contacts-sync-프로토콜화-ai4lt.md`.
 
 ## 제약
 
