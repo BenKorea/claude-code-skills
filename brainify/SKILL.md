@@ -30,11 +30,17 @@ helper 는 `python3 ~/.claude/skills/brainify/brainify.py <subcommand>` 로 호�
    - (스레드면) **`brainify.py contacts "<item>"`** 도 호출 — `_thread.md` 의 `participants`(gmail-label-actions
      가 gog 로 해석한 이름·이메일·`contact_id`)를 인맥 노트와 매칭해 `matched`(노트 有)/`unmatched`(contact_id 有·노트 無)/`no_contact` 로 분류해 준다. 인맥 반영(§아래)의 입력.
    - **`_thread.md` 의 `mail_class` 확인** — 포워드 메일은 봉투 참여자가 실제 상대가 아닐 수 있다(§5 포워드 처리). `native`=봉투 그대로, `self-forward`=봉투 비고 본문에 진짜 상대, `other-forward`=봉투는 전달자(인맥)·인용 인물은 참조. 정책 [[project-gmail-forward-3class-policy]].
+   - **★ 스레드 신선도 (2026-07-13)**: `_thread.md` 의 `gmail_thread_id`+`message_count` 를 gog 현재값과 대조 — 변동(캡처 후 후속, 특히 **내 발신 회신**) 시 재캡처/보강 후 진행. 캡처는 스냅샷이라 소비 시점이 최종 방어(gmail-label-actions sent-poll 은 00_inbox 존재분만 재캡처). gog 실패 시 non-fatal — 그대로 진행(헤드리스 동일).
    - 파싱은 brainify 가 하지 않는다 — extract(parser-drain)+[[refine]] 가 만든 `<원본>_parse/refined.md`
      를 읽는다(`via: refined:<엔진>`). refined.md 가 없으면(파이프라인 미경유 단건) docling 1회 fallback
      (`via: docling`). 즉 **파싱이 끝난 다음부터가 brainify** — 두 파서 비교·보정은 refine 이 이미 끝냄.
    - `via: error` 또는 markdown 이 비정상적으로 짧으면 → commit 시 `--confidence low`.
    - refined.md 가 없고 PDF 가 듀얼 검증이 필요해 보이면 → 먼저 `/refine` 권유(또는 parser-drain 대기).
+   - **★ 오디오(m4a·mp3 등 — 폰 음성녹음, 2026-07-13)**: parser-drain 오디오 루프(faster-whisper 로컬 GPU)가
+     `<원본>_parse/refined.md`(타임스탬프 전사)를 생산 — brainify 는 그걸 소비만 한다(`via: refined:faster-whisper-*`).
+     refined 부재 시 `via: pending-transcription` → docling fallback 금지, parser-drain 대기(전사는 whisper venv 머신=kimbi 전용).
+     **선별 게이트**: 폰 녹음은 전사까지 *자동*, PARA 편입은 *이 스킬 실행(=Dr. Ben 지시)* 시점 — 사적·무가치 녹음은 편입 대신 삭제 제안.
+     노트 본문에는 전사 전문 덤프 금지(요약·핵심·행동 항목), 전문은 refined.md 가 raw 층으로 보존.
    - **★ xlsx 등 데이터 스프레드시트는 docling `_parse` 생략 (2026-06-07)**: 명단·시트류는 *구조화 데이터 자체가 값* — full-text 파싱 가치 낮음. `_parse` 미동반이 정상(없어도 `via: error` 아님).
      - **파악 경로 = 경량 stdlib 추출** (Read 도구는 xlsx 렌더 못 함 → "그냥 Read" 안 됨): `python3 -c "import zipfile,re; print(re.findall(r'<t[^>]*>([^<]*)</t>', zipfile.ZipFile('<xlsx>').read('xl/sharedStrings.xml').decode('utf-8','ignore')))"` 로 셀 텍스트 즉시 추출(deps·모델·docker 0). 정밀 셀 위치 필요 시만 `xl/worksheets/sheet*.xml` 조인. → 그 내용을 노트 본문 표로 정리. (inspect `via: skipped-xlsx`)
    - **★ 방대 reference PDF docling 제외 (backfill 동일, 페이지 우선 개정 2026-06-07)**: **페이지 ≥ 100(우선) OR 이름패턴**(`초록집·자료집·proceedings·abstract·논문집·카탈로그·book`) OR **(페이지 미상 시만) 크기 ≥ 20MB** → inspect 가 docling fallback 안 하고 `via: skipped-bulk (<reason>)` 반환(*저가치·timeout 회피*). → 노트는 **메타만**(행사·발표 N·본인 발표 위치), 정본 `parse: skipped-bulk`, PDF 보존, **필요 페이지만 on-demand `Read`**(멀티모달 `pages:"120-122"`). 정말 전체 필요 시 `/backfill ... --force-bulk` 또는 수동.

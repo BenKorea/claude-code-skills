@@ -36,8 +36,9 @@ PARSER_IMAGE = os.environ.get("BRAINIFY_PARSER_IMAGE", "ghcr.io/benkorea/2nd-bra
 MODELS_VOLUME = os.environ.get("BRAINIFY_MODELS_VOLUME", "2nd-brain-docker_brain-pdf-models")
 
 # 2nd-brain-parser 가 파싱하는 확장자 (그 외는 첨부로만 보존, 본문 추출 안 함)
+AUDIO = {".m4a", ".mp3", ".wav", ".ogg", ".opus", ".aac", ".amr"}   # 폰 음성녹음 등 — parser-drain 오디오 루프(faster-whisper)가 refined.md 생산
 PARSEABLE = {".pdf", ".docx", ".pptx", ".xlsx", ".hwp", ".hwpx", ".doc", ".ppt", ".xls",
-             ".odt", ".odp", ".ods", ".rtf"}
+             ".odt", ".odp", ".ods", ".rtf"} | AUDIO
 
 
 def _front(md_path: pathlib.Path) -> dict:
@@ -142,6 +143,9 @@ def _parse(host_path: pathlib.Path) -> dict:
     pre = _refined(host_path)
     if pre is not None:
         return pre
+    if host_path.suffix.lower() in AUDIO:                             # 오디오 — docling N/A, 전사는 parser-drain(whisper)
+        return {"via": "pending-transcription", "markdown": "",
+                "reason": "오디오 전사 대기 — parser-drain 오디오 루프(whisper venv 머신)가 refined.md 생산"}
     if host_path.suffix.lower() in (".xlsx", ".xls"):                 # 데이터 스프레드시트 — docling 불요
         return {"via": "skipped-xlsx", "markdown": "", "reason": "데이터 스프레드시트(zipfile→sharedStrings 경량 추출로 파악)"}
     bulk, reason = _is_bulk(host_path)                                # 방대 reference — auto-parse 제외
