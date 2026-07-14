@@ -23,10 +23,19 @@ helper 는 `python3 ~/.claude/skills/brainify/brainify.py <subcommand>` 로 호�
 `already_brainified: true` 거나 분류가 정말 모호하면 그 항목만 물어본다.
 
 1. **scan** — `brainify.py scan`. 처리 대상(스레드 폴더·낱개 파일) + 각 항목의
-   dedup 상태(`already_brainified`, `existing_notes`)를 받는다.
+   dedup 상태(`already_brainified`, `stale`, `update_of`, `message_count` / `filed_message_count`)를 받는다.
    - `already_brainified: true` → 기본 skip. 사용자에게 "이미 있음, 덮어쓸까요?" 만 확인.
+   - **★ `stale: true` → skip 하지 말고 *갱신*한다 (2026-07-14 신설).** 같은 `thread_id` 의 노트가
+     이미 있지만 **재캡처본에 메시지가 늘었다**(`message_count` > `filed_message_count`)는 뜻이다.
+     `update_of` 가 **고칠 노트**를 준다 — **새 노트를 만들지 말 것**(중복 = "한 사안 = 한 정본" 위반).
+     > 왜: dedup 이 `thread_id` 단독이던 시절, 스레드에 답장이 오면 재캡처만 쌓이고 노트는 첫 스냅샷에
+     > **얼어붙었다**(실측: 7통 중 1통만 반영된 채 인박스에 영구 적체). *중복 방지가 갱신 차단으로 작동*.
+     > 에러가 안 나서 모든 진단이 green 인 채 조용히 낡는 게 이 결함의 성질이다.
 2. **inspect** — 항목별 `brainify.py inspect "<item>"`. 스레드 본문(`_thread.md`)과
    첨부의 **정제 markdown**, `identifier`, `via` 를 받는다.
+   - **`stale` 이면 `existing_note_body`(기존 노트 전문)도 함께 온다.** 새 메시지를 반영하되
+     **Dr. Ben 이 손으로 쓴 「내 생각」·수동 링크는 보존해 *병합***한다 (통째 재작성 ✗ — 사람 편집 소실).
+     `commit` 은 `update_of` 노트를 **제자리 갱신**하고 `--para`·`--name` 은 무시한다(기존 좌표가 권위).
    - (스레드면) **`brainify.py contacts "<item>"`** 도 호출 — `_thread.md` 의 `participants`(gmail-label-actions
      가 gog 로 해석한 이름·이메일·`contact_id`)를 인맥 노트와 매칭해 `matched`(노트 有)/`unmatched`(contact_id 有·노트 無)/`no_contact` 로 분류해 준다. 인맥 반영(§아래)의 입력.
    - **`_thread.md` 의 `mail_class` 확인** — 포워드 메일은 봉투 참여자가 실제 상대가 아닐 수 있다(§5 포워드 처리). `native`=봉투 그대로, `self-forward`=봉투 비고 본문에 진짜 상대, `other-forward`=봉투는 전달자(인맥)·인용 인물은 참조. 정책 [[project-gmail-forward-3class-policy]].
@@ -124,6 +133,9 @@ helper 는 `python3 ~/.claude/skills/brainify/brainify.py <subcommand>` 로 호�
 **사용자가 없다 — 절대 묻지 말 것**. 위 "물어본다"·"한 번 확인" 분기를 모두 다음으로 대체:
 
 - `already_brainified: true` → 묻지 말고 **skip**(로그만).
+- **`stale: true` → 묻지 말고 *갱신***(skip ✗). `inspect` 의 `existing_note_body` 와 새 메시지를 병합해
+  `update_of` 노트를 제자리 갱신. 사람 편집(「내 생각」)은 보존. 헤드리스에서도 이 경로는 **자동**이다 —
+  진행 중 스레드의 노트가 낡는 게 이 결함의 피해이고, 그건 무인 드레인이 고쳐야 할 몫이다.
 - PARA 좌표가 모호 → 묻지 말고 **가장 그럴듯한 좌표로 낙관 배치 + `--confidence` 와 무관하게
   commit**(helper 가 `para_review: pending` 부착). 교정은 주간 감사가.
 - `via: error`/markdown 비정상·refined.md 부재로 듀얼검증 필요 → `--confidence low` 로 commit(유실 0).

@@ -72,6 +72,62 @@ def _grep_knowledge(identifier: str) -> list[str]:
         return []
 
 
+def _msg_count(thread_md: pathlib.Path) -> int:
+    """_thread.md frontmatter 의 message_count. 없으면 0."""
+    if not thread_md.exists():
+        return 0
+    try:
+        return int(_front(thread_md).get("message_count", "0") or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _filed_count(note: pathlib.Path) -> int:
+    """이 노트가 *실제로 반영한* 메시지 수.
+
+    1순위 = 노트 frontmatter `thread_message_count` (commit 이 기록).
+    2순위 = 노트가 가리키는 sources/ 의 `_thread.md` 의 message_count — **하위호환**:
+    2026-07-14 이전 노트엔 1순위 필드가 없다. 그 노트들도 commit 때 _thread.md 를
+    sources 로 옮겨놨으므로 그 스냅샷이 "무엇까지 반영했는가"의 증거가 된다.
+    """
+    fm = _front(note)
+    try:
+        n = int(fm.get("thread_message_count", "") or 0)
+        if n:
+            return n
+    except (TypeError, ValueError):
+        pass
+    src = (fm.get("sources", "") or "").strip().strip("/")
+    if not src:
+        return 0
+    return _msg_count(VAULT / src / "_thread.md")
+
+
+def _dedup(identifier: str, inbox_count: int) -> dict:
+    """중복/갱신 판정 — thread_id 단독이 아니라 **thread_id + message_count**.
+
+    thread_id 만 보면 "이미 노트 있음 → skip" 이 되어, 스레드에 새 답장이 와도 재캡처만
+    쌓이고 노트는 첫 스냅샷에 얼어붙는다(2026-07-14 규명: 7통 중 1통만 반영된 채 정체).
+    중복 방지가 갱신 차단으로 작동한 것. 그래서 *메시지가 늘었으면 갱신 대상*으로 본다.
+    """
+    hits = _grep_knowledge(identifier) if identifier else []
+    if not hits:
+        return {"already_brainified": False, "existing_notes": [], "stale": False,
+                "update_of": "", "filed_message_count": 0}
+    filed = max((_filed_count(pathlib.Path(h)) for h in hits), default=0)
+    stale = bool(inbox_count) and inbox_count > filed
+    # 갱신 대상이면 *어느 노트를 고칠지* 를 함께 준다 (새 노트 생성 = 중복 → 금지)
+    target = ""
+    if stale:
+        target = next((h for h in hits if _filed_count(pathlib.Path(h)) == filed), hits[0])
+        try:
+            target = str(pathlib.Path(target).relative_to(VAULT))
+        except ValueError:
+            pass
+    return {"already_brainified": not stale, "existing_notes": hits, "stale": stale,
+            "update_of": target, "filed_message_count": filed}
+
+
 def _sha256(path: pathlib.Path) -> str:
     h = hashlib.sha256()
     with open(path, "rb") as f:
@@ -180,19 +236,19 @@ def _items() -> list[dict]:
             if (p / "_thread.md").exists():
                 fm = _front(p / "_thread.md")
                 out.append({"item": p.name, "kind": "thread",
-                            "identifier": fm.get("gmail_thread_id", "")})
+                            "identifier": fm.get("gmail_thread_id", ""),
+                            "message_count": _msg_count(p / "_thread.md")})
         elif p.is_file() and p.suffix.lower() in PARSEABLE:
             out.append({"item": p.name, "kind": "file",
-                        "identifier": "sha:" + _sha256(p)})
+                        "identifier": "sha:" + _sha256(p),
+                        "message_count": 0})
     return out
 
 
 def cmd_scan(_args) -> int:
     items = _items()
     for it in items:
-        hits = _grep_knowledge(it["identifier"]) if it["identifier"] else []
-        it["already_brainified"] = bool(hits)
-        it["existing_notes"] = hits
+        it.update(_dedup(it["identifier"], it.get("message_count", 0)))
     print(json.dumps({"vault": str(VAULT), "count": len(items), "items": items},
                      ensure_ascii=False, indent=2))
     return 0
@@ -206,6 +262,7 @@ def cmd_inspect(args) -> int:
     if item.is_dir():  # 스레드 폴더
         result["kind"] = "thread"
         result["identifier"] = _front(item / "_thread.md").get("gmail_thread_id", "")
+        result["message_count"] = _msg_count(item / "_thread.md")
         body = (item / "_thread.md").read_text(encoding="utf-8") if (item / "_thread.md").exists() else ""
         result["parts"].append({"name": "_thread.md", "via": "(email body)", "markdown": body})
         for att in sorted(item.iterdir()):
@@ -215,9 +272,16 @@ def cmd_inspect(args) -> int:
     else:  # 낱개 파일
         result["kind"] = "file"
         result["identifier"] = "sha:" + _sha256(item)
+        result["message_count"] = 0
         pr = _parse(item)
         result["parts"].append({"name": item.name, "via": pr["via"], "markdown": pr["markdown"]})
-    result["already_brainified"] = bool(_grep_knowledge(result["identifier"])) if result["identifier"] else False
+    result.update(_dedup(result["identifier"], result.get("message_count", 0)))
+    # 갱신(stale)이면 기존 노트 본문을 함께 준다 — LLM 이 새 메시지를 반영하되
+    # Dr. Ben 이 손으로 쓴 「내 생각」 등을 보존해 *병합*하도록. commit 은 이 노트를 제자리 갱신.
+    if result.get("stale") and result.get("update_of"):
+        prev = VAULT / result["update_of"]
+        if prev.exists():
+            result["existing_note_body"] = prev.read_text(encoding="utf-8")
     print(json.dumps(result, ensure_ascii=False))
     return 0
 
@@ -228,43 +292,79 @@ def _slug(s: str, n: int = 60) -> str:
     return s[:n] or "untitled"
 
 
+def _move_into(src: pathlib.Path, dst: pathlib.Path) -> None:
+    """src → dst 이동 (dst 가 이미 있으면 덮어씀).
+
+    갱신(재캡처) 경로에서 필요: dst 가 *디렉토리*인데 그냥 shutil.move 하면 그 **안으로** 중첩된다
+    (`_parse/_parse`). 파일이면 os.rename 이 덮어쓰지만 디렉토리는 아니므로 먼저 지운다.
+    """
+    if dst.exists():
+        shutil.rmtree(dst) if dst.is_dir() else dst.unlink()
+    shutil.move(str(src), str(dst))
+
+
 def cmd_commit(args) -> int:
     item = INBOX / args.item
     if not item.exists():
         print(json.dumps({"error": f"없음: {item}"}, ensure_ascii=False)); return 1
-    para = args.para.strip("/")  # 예: 02_areas/재정
-    name = _slug(args.name)
-    dest_src = SOURCES / para / name
+
+    # ── 갱신 경로: 같은 thread_id 의 노트가 이미 있고 메시지가 늘었으면 *그 노트를 제자리 갱신*.
+    # 새 노트/새 sources 폴더를 만들면 "한 사안 = 한 정본" 이 깨지고 중복이 쌓인다.
+    # args.para/--name 은 이 경우 무시된다 — 기존 좌표가 권위.
+    updating = ""
+    if item.is_dir() and (item / "_thread.md").exists():
+        d = _dedup(_front(item / "_thread.md").get("gmail_thread_id", ""), _msg_count(item / "_thread.md"))
+        if d["stale"] and d["update_of"]:
+            updating = d["update_of"]
+
+    if updating:
+        note = VAULT / updating
+        para = str(note.parent.relative_to(KNOWLEDGE))
+        name = note.stem
+        src_rel = (_front(note).get("sources", "") or "").strip().strip("/")
+        dest_src = (VAULT / src_rel) if src_rel else (SOURCES / para / name)
+        sources_field = f"{src_rel}/" if src_rel else f"sources/{para}/{name}/"
+    else:
+        para = args.para.strip("/")  # 예: 02_areas/재정
+        name = _slug(args.name)
+        dest_src = SOURCES / para / name
+        note = KNOWLEDGE / para / f"{name}.md"
+        sources_field = f"sources/{para}/{name}/"
+
     dest_src.mkdir(parents=True, exist_ok=True)
     # 식별자 재도출
     if item.is_dir():
         identifier = _front(item / "_thread.md").get("gmail_thread_id", "")
         id_field = f"gmail_thread_id: {identifier}" if identifier else ""
+        msg_count = _msg_count(item / "_thread.md")
         for c in item.iterdir():
-            shutil.move(str(c), str(dest_src / c.name))
+            _move_into(c, dest_src / c.name)   # 재캡처본이 옛 스냅샷을 덮어씀 (raw 층 갱신)
         item.rmdir()
     else:
         identifier = "sha:" + _sha256(item)
         id_field = f"source_sha256: {identifier.split(':',1)[1]}"
-        shutil.move(str(item), str(dest_src / item.name))
+        msg_count = 0
+        _move_into(item, dest_src / item.name)
         # 파생 _parse(refined.md·json) 도 원본 옆으로 동반 이동 — 안 옮기면 inbox 에 고아로 남고
         # source 와 분리됨(CLAUDE.md: _parse 는 sources 경로+_parse 위치). 스레드 분기는 폴더 통째 이동이라 무관.
         parse_dir = item.parent / (item.name + "_parse")
         if parse_dir.exists():
-            shutil.move(str(parse_dir), str(dest_src / parse_dir.name))
+            _move_into(parse_dir, dest_src / parse_dir.name)
     body = pathlib.Path(args.body_file).read_text(encoding="utf-8") if args.body_file else ""
     tags = "[" + ", ".join(t.strip() for t in (args.tags or "").split(",") if t.strip()) + "]"
-    note = KNOWLEDGE / para / f"{name}.md"
     note.parent.mkdir(parents=True, exist_ok=True)
     fm = [
         "---",
         f"title: {args.title or name}",
         f"date: {args.date or ''}",
         f"tags: {tags}",
-        f"sources: sources/{para}/{name}/",
+        f"sources: {sources_field}",
     ]
     if id_field:
         fm.append(id_field)
+    if msg_count:
+        # 이 노트가 *반영한* 메시지 수. 다음 재캡처가 이보다 많으면 갱신 대상(_dedup).
+        fm.append(f"thread_message_count: {msg_count}")
     if args.via:
         fm.append(f"parse_via: {args.via}")
     if args.doc_status and args.doc_status != "final":
@@ -280,7 +380,8 @@ def cmd_commit(args) -> int:
     ]
     note.write_text("\n".join(fm) + body + "\n", encoding="utf-8")
     print(json.dumps({"ok": True, "note": str(note), "sources": str(dest_src),
-                      "identifier": identifier}, ensure_ascii=False))
+                      "identifier": identifier, "message_count": msg_count,
+                      "updated": bool(updating)}, ensure_ascii=False))
     return 0
 
 
