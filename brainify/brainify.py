@@ -34,6 +34,10 @@ SOURCES = VAULT / "sources"
 INMAEK = KNOWLEDGE / "02_areas" / "인맥"   # 인맥(관계 맥락) 허브 노트 폴더
 PARSER_IMAGE = os.environ.get("BRAINIFY_PARSER_IMAGE", "ghcr.io/benkorea/2nd-brain-parser:latest")
 MODELS_VOLUME = os.environ.get("BRAINIFY_MODELS_VOLUME", "2nd-brain-docker_brain-pdf-models")
+# HWP/HWPX 는 컨테이너 docling 경로가 실패(soffice 프로필 미초기화) → 호스트 hwp_refine.py 로 직접 refined.md 생산.
+# parser-drain(extract)이 아직 안 돈 항목을 brainify 가 먼저 만나도 self-heal (레이스 제거). 2nd-brain repo(in-routine)에 존재.
+HWP_REFINE = pathlib.Path(os.path.expanduser(os.environ.get(
+    "BRAINIFY_HWP_REFINE", "~/projects/2nd-brain/docker/parser-drain/hwp_refine.py")))
 
 # 2nd-brain-parser 가 파싱하는 확장자 (그 외는 첨부로만 보존, 본문 추출 안 함)
 AUDIO = {".m4a", ".mp3", ".wav", ".ogg", ".opus", ".aac", ".amr"}   # 폰 음성녹음 등 — parser-drain 오디오 루프(faster-whisper)가 refined.md 생산
@@ -207,6 +211,18 @@ def _parse(host_path: pathlib.Path) -> dict:
     bulk, reason = _is_bulk(host_path)                                # 방대 reference — auto-parse 제외
     if bulk:
         return {"via": "skipped-bulk", "markdown": "", "reason": reason}
+    if host_path.suffix.lower() in (".hwp", ".hwpx"):                # HWP — 컨테이너 docling 실패 경로. 호스트 hwp_refine 로 refined.md 직접 생산(parser-drain 미선행 시 self-heal, 레이스 제거)
+        if not HWP_REFINE.exists():
+            return {"via": "error", "markdown": "", "error": f"hwp_refine.py 없음: {HWP_REFINE} (2nd-brain repo 미clone?)"}
+        try:
+            subprocess.run(["python3", str(HWP_REFINE), str(host_path)],
+                           capture_output=True, text=True, timeout=300, check=True)
+        except Exception as e:
+            return {"via": "error", "markdown": "", "error": f"hwp_refine 실패: {str(e)[-200:]}"}
+        pre = _refined(host_path)                                     # hwp_refine 이 만든 refined.md 재소비
+        if pre is not None:
+            return pre
+        return {"via": "error", "markdown": "", "error": "hwp_refine 실행됐으나 refined.md 없음"}
     cmd = [
         "docker", "run", "--rm", "-u", f"{os.getuid()}:{os.getgid()}",
         "-v", f"{VAULT}:/home/user/projects/2nd-brain-vault",

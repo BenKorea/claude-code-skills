@@ -19,6 +19,7 @@ BULK_MB = 20                 # 방대 제외 임계(MB)
 BULK_NAME = re.compile(r"(?i)초록집|자료집|proceedings|abstract|논문집|카탈로그|catalog|book")  # 전 포맷
 GLA = os.path.expanduser("~/.openclaw/workspace/skills/gmail-label-actions/run.py")
 REFINE = os.path.expanduser("~/.claude/skills/refine/refine.py")
+HWP_REFINE = os.path.expanduser("~/projects/2nd-brain/docker/parser-drain/hwp_refine.py")  # HWP: 컨테이너 docling 실패 → 호스트 직접 refined.md
 COMPOSE_DIR = os.path.expanduser("~/projects/2nd-brain/docker/2nd-brain-parser")
 COMPOSE_FILE = "compose.2nd-brain-parser.yml"
 KEYRING_PW = os.path.expanduser("~/.config/gogcli/.keyring-password")
@@ -135,6 +136,17 @@ def cmd_parse(args):
             if bulk and not args.force_bulk:                 # 방대 reference → auto-parse 제외
                 results.append({"file": f.name, "status": f"skip(bulk: {reason})",
                                 "hint": "정본 parse: skipped-bulk 표기, 필요 페이지만 Read(멀티모달) on-demand"})
+                continue
+            if f.suffix.lower() in (".hwp", ".hwpx"):        # HWP — 컨테이너 docling 실패 경로. 호스트 hwp_refine 로 refined.md 직접 생산
+                if (pdir / "refined.md").exists():
+                    results.append({"file": f.name, "status": "skip(이미)"}); continue
+                if not os.path.exists(HWP_REFINE):
+                    results.append({"file": f.name, "status": "FAIL hwp(hwp_refine.py 없음)"}); continue
+                rh = subprocess.run(["python3", HWP_REFINE, str(f)], capture_output=True, text=True, timeout=300)
+                ok = rh.returncode == 0 and (pdir / "refined.md").exists()
+                results.append({"file": f.name, "status": "parsed" if ok else "FAIL hwp(host)",
+                                "engines": "hwp-libreoffice-pandoc", "verdict": "single",
+                                "refined": ok, "needs_vision_refine": False})
                 continue
             pdir.mkdir(exist_ok=True)
             r = _dexec("brain-pdf", "parse-docling", _cpath(f))
