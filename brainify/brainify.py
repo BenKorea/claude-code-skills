@@ -41,8 +41,9 @@ HWP_REFINE = pathlib.Path(os.path.expanduser(os.environ.get(
 
 # 2nd-brain-parser 가 파싱하는 확장자 (그 외는 첨부로만 보존, 본문 추출 안 함)
 AUDIO = {".m4a", ".mp3", ".wav", ".ogg", ".opus", ".aac", ".amr"}   # 폰 음성녹음 등 — parser-drain 오디오 루프(faster-whisper)가 refined.md 생산
+IMAGE = {".jpg", ".jpeg", ".png", ".webp", ".jfif", ".heic", ".bmp", ".tif", ".tiff", ".gif"}  # 폰 사진·스캔·명판 등 — parser-drain 이미지 루프(MinerU OCR)가 <원본>_parse/ocr.json 생산 (2026-07-20: 사진 무인 편입 활성)
 PARSEABLE = {".pdf", ".docx", ".pptx", ".xlsx", ".hwp", ".hwpx", ".doc", ".ppt", ".xls",
-             ".odt", ".odp", ".ods", ".rtf"} | AUDIO
+             ".odt", ".odp", ".ods", ".rtf"} | AUDIO | IMAGE
 
 
 def _front(md_path: pathlib.Path) -> dict:
@@ -206,6 +207,17 @@ def _parse(host_path: pathlib.Path) -> dict:
     if host_path.suffix.lower() in AUDIO:                             # 오디오 — docling N/A, 전사는 parser-drain(whisper)
         return {"via": "pending-transcription", "markdown": "",
                 "reason": "오디오 전사 대기 — parser-drain 오디오 루프(whisper venv 머신)가 refined.md 생산"}
+    if host_path.suffix.lower() in IMAGE:                             # 이미지 — refined.md 없이 parser-drain 이미지 루프의 ocr.json 소비 (2026-07-20)
+        ocr = host_path.parent / (host_path.name + "_parse") / "ocr.json"
+        if ocr.exists():
+            try:
+                d = json.loads(ocr.read_text(encoding="utf-8"))
+                eng = str(d.get("engine", "ocr:pipeline"))
+                return {"via": eng if eng.startswith("ocr") else "ocr:" + eng, "markdown": d.get("markdown", "") or ""}
+            except Exception as e:
+                return {"via": "error", "markdown": "", "error": f"ocr.json 파싱 실패: {str(e)[-200:]}"}
+        return {"via": "pending-ocr", "markdown": "",
+                "reason": "이미지 OCR 대기 — parser-drain 이미지 루프(MinerU)가 ocr.json 생산"}
     if host_path.suffix.lower() in (".xlsx", ".xls"):                 # 데이터 스프레드시트 — docling 불요
         return {"via": "skipped-xlsx", "markdown": "", "reason": "데이터 스프레드시트(zipfile→sharedStrings 경량 추출로 파악)"}
     bulk, reason = _is_bulk(host_path)                                # 방대 reference — auto-parse 제외
@@ -228,7 +240,9 @@ def _parse(host_path: pathlib.Path) -> dict:
         "-v", f"{VAULT}:/home/user/projects/2nd-brain-vault",
         "-v", f"{MODELS_VOLUME}:/home/user/.cache/huggingface",
         "-e", "HF_HOME=/home/user/.cache/huggingface", "-e", "HOME=/home/user",
-        PARSER_IMAGE, "2nd-brain-parser", "parse-docling", _container_path(host_path),
+        # 2026-07-20 회귀수리: 컨테이너 바이너리명이 `2nd-brain-parser`(심볼릭, 재빌드마다 탈락) → `brain-pdf`(base, 안정).
+        # 심볼릭 회귀로 docling fallback 이 항상 via:error → 무인 커밋 전부 parse_confidence:low 였음(handoff 2026-07-17).
+        PARSER_IMAGE, "brain-pdf", "parse-docling", _container_path(host_path),
     ]
     try:
         r = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
