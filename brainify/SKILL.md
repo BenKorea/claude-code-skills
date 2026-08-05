@@ -154,6 +154,27 @@ helper 는 `python3 ~/.claude/skills/brainify/brainify.py <subcommand>` 로 호�
 근거: [자동 우선·주간 감사 정책](../../../../projects/2nd-brain-vault/knowledge/02_areas/brain-system/automation-review-policy.md)
 — 건별 승인 폐기 = 낙관 배치 + 플래그 + 주간 감사. 헤드리스는 이 정책의 구현이다.
 
+## 모드 3 — 재작성 (`/brainify --renote "<note>"`, 2026-08-05 신설)
+
+**뒤늦게 도착한 풀텍스트로 stub 노트를 다시 맞춘다.** `parse_confidence: low` 는 "노트를 쓸 때
+`refined.md` 가 없었다"는 뜻인데(전형: `parse_via: pending-ocr`), extract·refine 이 나중에 성공해도
+**노트는 저절로 고쳐지지 않는다** — `scan` 은 `00_inbox` 미처리 항목만 보고 filed 된 노트는 대상이
+아니기 때문이다. 그 결과 파싱은 끝났는데 플래그만 영구히 남는다(2026-08-05 규명, 7건).
+
+1. **후보** — `brainify.py renote-scan` → `ready: true`(붙어 있는 `_parse` 전부에 `refined.md` 존재)만 처리.
+   `ready: false` 는 아직 refine 대기이므로 **건드리지 말 것**(다음 드레인이 채운다).
+2. **재료** — `brainify.py renote-read "<note>"` → 기존 frontmatter·본문 + `refined.md` 전문 + `_thread.md`.
+3. **판단 — 세 갈래.** 후보의 편차가 크므로 기계적으로 다시 쓰지 말 것:
+   - **본문이 이미 풀텍스트와 부합** (촬영본 source-trail 등 원래 충분했던 노트) → **본문 유지**,
+     `renote-write "<note>" --confidence ok` 로 **플래그만 내린다**(`--body-file` 생략).
+   - **풀텍스트가 새 사실을 준다** → 요약·핵심을 보강해 `--body-file` 로 교체. **「내 생각」과 사람이 쓴
+     문단은 반드시 보존**(병합이지 덮어쓰기가 아니다). `[[wikilink]]`·`sources:` 링크도 유지.
+   - **refined.md 가 사실상 빈 텍스트·깨짐** → 다시 쓰지 말고 `--confidence low` 유지로 끝낸다(플래그 존치).
+4. **기록** — `renote-write` 가 `renoted: YYYY-MM-DD` 를 붙인다. 같은 노트를 매 틱 다시 태우지 않게 하는 흔적.
+
+헤드리스(`/brainify --headless --renote "<note>"`, brain-drain Phase C)에서도 같다 — 묻지 말고 위 세 갈래로
+판단하고 끝낸다. **본문을 지우는 방향의 재작성은 금지**(유실 > clutter). 확신이 안 서면 플래그만 내린다.
+
 ## 모드 2 — 주간 감사 (`/brainify audit`)
 
 1. **audit** — `brainify.py audit`. `para_review: pending` · `parse_confidence: low`

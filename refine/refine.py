@@ -4,6 +4,8 @@
 extract(2nd-brain-parser 컨테이너 + parser-drain)가 만든 `_parse/{docling,mineru,diff}.json`
 을 읽어 **단일 권위 풀텍스트 `refined.md`** 를 만든다. match/single 은 결정형 승격(LLM 0),
 diverge 만 LLM 이 두 markdown 을 비전검증·보정해 write 한다.
+이미지는 docling 대신 `ocr.json` 하나만 나오며(스키마 동일), 이것도 1차 소스로 인정한다 —
+mineru 짝이 없어 verdict='single' → promote 경로(2026-08-05 추가, `_primary()` 주석 참조).
 
 서브커맨드 (모두 stdout JSON):
   scan [--root D]      D(기본 00_inbox) 아래 refined.md 없는 `*_parse/` 나열 + verdict·needs_llm.
@@ -51,6 +53,22 @@ def _verdict(parse_dir: pathlib.Path) -> tuple[str, dict | None]:
     return diff.get("verdict", "?"), diff
 
 
+def _primary(parse_dir: pathlib.Path) -> tuple[str, dict | None]:
+    """풀텍스트의 1차 소스. `(파일명, 내용)` — 없으면 `("", None)`.
+
+    docling.json 이 표준이지만 **이미지는 `ocr.json` 하나만 나온다**(extract 의 parse-ocr 경로:
+    image→mineru). 스키마는 docling.json 과 같다(markdown·via·pages). 이걸 인정하지 않으면
+    OCR 이 성공해 텍스트를 다 뽑아 놓고도 refined.md 로 승격될 길이 없어 brainify 가 영구히
+    stub(parse_confidence:low)을 쓴다 — 2026-08-05 실측으로 vault 에 그렇게 묶인 ocr.json 이
+    46개였다. mineru 짝이 없으니 verdict 는 자연히 'single' → promote(결정형, LLM 0).
+    """
+    for name in ("docling.json", "ocr.json"):
+        d = _load(parse_dir / name)
+        if d:
+            return name, d
+    return "", None
+
+
 def _candidates(root: pathlib.Path) -> list[pathlib.Path]:
     if not root.exists():
         return []
@@ -58,11 +76,18 @@ def _candidates(root: pathlib.Path) -> list[pathlib.Path]:
 
 
 def cmd_scan(args) -> int:
-    root = pathlib.Path(os.path.expanduser(args.root)) if args.root else INBOX
+    # --root 는 절대경로·vault 상대경로 둘 다 받는다. 예전엔 상대경로를 그대로 rglob 해서
+    # 뒤의 relative_to(VAULT) 가 ValueError 로 죽었다(2026-08-05).
+    if args.root:
+        root = pathlib.Path(os.path.expanduser(args.root))
+        if not root.is_absolute():
+            root = VAULT / root
+    else:
+        root = INBOX
     items: list[dict] = []
     for pd in _candidates(root):
-        docling = pd / "docling.json"
-        if not docling.exists():
+        engine_file, primary = _primary(pd)
+        if not primary:
             # extract 미완/실패 — refine 불가
             items.append({"parse_dir": str(pd.relative_to(VAULT)), "status": "no-extract",
                           "parse_error": (pd / ".parse-error").exists()})
@@ -73,6 +98,7 @@ def cmd_scan(args) -> int:
             "parse_dir": str(pd.relative_to(VAULT)),
             "source": str(_source_of(pd).relative_to(VAULT)),
             "verdict": verdict,
+            "primary": engine_file,
             "has_mineru": (pd / "mineru.json").exists(),
             "refined": done,
             "needs_llm": (verdict == "diverge") and not done,
@@ -89,7 +115,8 @@ def cmd_read(args) -> int:
     pd = (VAULT / args.parse_dir) if not os.path.isabs(args.parse_dir) else pathlib.Path(args.parse_dir)
     if not pd.exists():
         print(json.dumps({"error": f"없음: {pd}"}, ensure_ascii=False)); return 1
-    docling = _load(pd / "docling.json") or {}
+    engine_file, primary = _primary(pd)
+    docling = primary or {}
     mineru = _load(pd / "mineru.json")
     verdict, diff = _verdict(pd)
     out = {
@@ -97,6 +124,7 @@ def cmd_read(args) -> int:
         "source": str(_source_of(pd).relative_to(VAULT)),
         "source_abs": str(_source_of(pd)),
         "verdict": verdict,
+        "primary": engine_file,
         "metrics": (diff or {}).get("metrics"),
         "thresholds": (diff or {}).get("thresholds"),
         "details": (diff or {}).get("details"),
@@ -135,15 +163,15 @@ def _write_refined(pd: pathlib.Path, base_engine: str, corrections: list[str],
 def cmd_promote(args) -> int:
     """match/single → docling markdown 그대로 refined.md (결정형)."""
     pd = (VAULT / args.parse_dir) if not os.path.isabs(args.parse_dir) else pathlib.Path(args.parse_dir)
-    docling = _load(pd / "docling.json")
-    if not docling:
-        print(json.dumps({"error": f"docling.json 없음/손상: {pd}"}, ensure_ascii=False)); return 1
+    engine_file, primary = _primary(pd)          # docling.json 우선, 없으면 ocr.json(이미지)
+    if not primary:
+        print(json.dumps({"error": f"docling.json·ocr.json 둘 다 없음/손상: {pd}"}, ensure_ascii=False)); return 1
     if (pd / "refined.md").exists() and not args.force:
         print(json.dumps({"ok": True, "skipped": "refined.md 이미 있음", "refined": str(pd / "refined.md")},
                          ensure_ascii=False)); return 0
-    md = docling.get("markdown", "")
-    conf = "low" if (docling.get("via") == "error" or len(md.strip()) < 20) else "ok"
-    res = _write_refined(pd, docling.get("via", "docling"), [], md, conf)
+    md = primary.get("markdown", "")
+    conf = "low" if (primary.get("via") == "error" or len(md.strip()) < 20) else "ok"
+    res = _write_refined(pd, primary.get("via", engine_file.removesuffix(".json")), [], md, conf)
     print(json.dumps(res, ensure_ascii=False)); return 0
 
 

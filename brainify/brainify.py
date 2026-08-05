@@ -7,6 +7,9 @@
   commit  <item> ...   원본을 sources/<para>/<name>/ 로 이동 + knowledge/<para>/<name>.md
                        동반 노트(frontmatter+본문) 작성 + 정책 플래그 + inbox 비움.
   audit                플래그된(para_review:pending / parse_confidence:low) 노트 나열.
+  renote-scan          refined.md 가 뒤늦게 생긴 parse_confidence:low 노트 나열(재작성 후보).
+  renote-read  <note>  재작성 재료: 기존 노트 + refined.md 전문 + _thread.md.
+  renote-write <note>  본문 교체(--body-file, 생략 가능) + parse_confidence 갱신 + renoted 마커.
 
 판단(LLM)은 inspect 와 commit 사이에서: 에이전트가 markdown 을 읽고 PARA 좌표·파일명·
 요약·내생각·링크를 정해 commit 인자로 넘긴다 (자동 우선·주간 감사 정책).
@@ -402,6 +405,10 @@ def cmd_commit(args) -> int:
         fm.append(f"doc_status: {args.doc_status}")
     if args.superseded_by:
         fm.append(f"superseded_by: \"[[{args.superseded_by}]]\"")
+    if getattr(args, "source_missing", False):
+        # 파싱 실패가 아니라 **파싱할 원본이 없음**. 파서를 아무리 고쳐도 해결되지 않으므로
+        # parse_confidence:low 와 같은 통에 넣지 않는다(드레인 보고에서도 따로 센다).
+        fm.append("source_missing: true")
     fm += [
         "para_review: pending",           # 정책: 낙관 배치 → 주간 감사
         f"parse_confidence: {args.confidence or 'ok'}",
@@ -432,10 +439,138 @@ def cmd_audit(args) -> int:
                 flagged.append({"note": str(md.relative_to(VAULT)),
                                 "para_review": fm.get("para_review", ""),
                                 "parse_confidence": fm.get("parse_confidence", ""),
+                                # 원본 부재 — 파싱 실패와 구분해 세라는 신호(소비자: drain-report.py).
+                                "source_missing": str(fm.get("source_missing", "")).lower() == "true",
                                 "gcontacts_review": gr,
                                 "title": fm.get("title", ""),
                                 "sources": fm.get("sources", "")})
     print(json.dumps({"count": len(flagged), "flagged": flagged}, ensure_ascii=False, indent=2))
+    return 0
+
+
+# ── renote: 뒤늦게 도착한 풀텍스트로 stub 노트 재작성 ─────────────────────────
+#
+# parse_confidence:low 는 "노트를 쓸 때 refined.md 가 없었다"는 뜻이다(parse_via: pending-ocr 등).
+# 그런데 extract·refine 이 나중에 성공해도 **노트는 저절로 고쳐지지 않는다** — brainify 의 scan 은
+# 00_inbox 의 미처리 항목만 보고, 이미 filed 된 노트는 대상이 아니기 때문이다(2026-08-05 규명).
+# 그래서 refined.md 가 생긴 low 노트를 다시 집어 LLM 이 대조·보강하고 플래그를 내리는 경로를 둔다.
+#
+# 판단은 LLM 몫이다. 실제 후보를 보면 편차가 크다 — 어떤 노트는 촬영본 source-trail 이라 본문이
+# 이미 충분하고 플래그만 낡았고, 어떤 노트는 풀텍스트가 없어 요약이 얕다. 그래서 helper 는
+# 재료(기존 본문 + refined.md)를 모아 주기만 하고, 다시 쓸지 플래그만 내릴지는 스킬이 정한다.
+MAX_REFINED_CHARS = 40000       # renote-read 가 넘겨줄 refined.md 1개당 상한
+
+
+def _split_front(md: pathlib.Path) -> tuple[list[str], str]:
+    """(frontmatter 줄 목록, 본문). frontmatter 가 없으면 ([], 전체)."""
+    txt = md.read_text(encoding="utf-8")
+    if not txt.startswith("---"):
+        return [], txt
+    end = txt.find("\n---", 3)
+    if end == -1:
+        return [], txt
+    return txt[3:end].strip("\n").splitlines(), txt[end + len("\n---"):].lstrip("\n")
+
+
+def _refined_targets(fm: dict) -> list[dict]:
+    """노트 frontmatter 의 `sources:` → refined.md 후보 목록.
+
+    sources 가 파일이면 `<파일>_parse/refined.md` 하나, 폴더면 그 안의 모든 `*_parse/refined.md`.
+    (폴더형 = 스레드 캡처 — 첨부가 여럿일 수 있어 refined 도 여럿이다.)
+    """
+    rel = (fm.get("sources") or "").strip().strip('"')
+    if not rel:
+        return []
+    src = VAULT / rel.rstrip("/")
+    pds: list[pathlib.Path] = []
+    if src.is_dir():
+        pds = sorted(p for p in src.glob("*_parse") if p.is_dir())
+    elif src.is_file():
+        pds = [src.parent / (src.name + "_parse")]
+    return [{"parse_dir": str(pd.relative_to(VAULT)),
+             "refined": str((pd / "refined.md").relative_to(VAULT)),
+             "ready": (pd / "refined.md").is_file()} for pd in pds]
+
+
+def cmd_renote_scan(_args) -> int:
+    """refined.md 가 (뒤늦게) 생긴 parse_confidence:low 노트 나열."""
+    items: list[dict] = []
+    for md in (KNOWLEDGE.rglob("*.md") if KNOWLEDGE.exists() else []):
+        fm = _front(md)
+        if fm.get("parse_confidence") != "low":
+            continue
+        if str(fm.get("source_missing", "")).lower() == "true":
+            continue                      # 원본 부재 — refined 가 생길 리 없다
+        tg = _refined_targets(fm)
+        items.append({
+            "note": str(md.relative_to(VAULT)),
+            "title": fm.get("title", ""),
+            "sources": fm.get("sources", ""),
+            "targets": tg,
+            # 붙어 있는 _parse 가 하나라도 있고 그 전부가 refined 면 재작성 재료가 갖춰진 것.
+            "ready": bool(tg) and all(t["ready"] for t in tg),
+        })
+    ready = [i for i in items if i["ready"]]
+    print(json.dumps({"count": len(items), "pending": len(ready), "items": items},
+                     ensure_ascii=False, indent=2))
+    return 0
+
+
+def cmd_renote_read(args) -> int:
+    """재작성 재료: 기존 노트(frontmatter+본문) + refined.md 전문 + _thread.md."""
+    note = (VAULT / args.note) if not os.path.isabs(args.note) else pathlib.Path(args.note)
+    if not note.exists():
+        print(json.dumps({"error": f"없음: {note}"}, ensure_ascii=False)); return 1
+    fm_lines, body = _split_front(note)
+    fm = _front(note)
+    parts = []
+    src = VAULT / (fm.get("sources") or "").strip().strip('"').rstrip("/")
+    thread = src / "_thread.md"
+    if thread.is_file():
+        parts.append({"name": "_thread.md", "markdown": thread.read_text(encoding="utf-8")})
+    for t in _refined_targets(fm):
+        if not t["ready"]:
+            continue
+        text = (VAULT / t["refined"]).read_text(encoding="utf-8")
+        truncated = len(text) > MAX_REFINED_CHARS
+        parts.append({"name": t["refined"], "truncated": truncated,
+                      "markdown": text[:MAX_REFINED_CHARS],
+                      **({"omitted_chars": len(text) - MAX_REFINED_CHARS} if truncated else {})})
+    print(json.dumps({"note": str(note.relative_to(VAULT)), "frontmatter": fm_lines,
+                      "existing_body": body, "parts": parts}, ensure_ascii=False))
+    return 0
+
+
+def cmd_renote_write(args) -> int:
+    """본문 교체 + parse_confidence 갱신 + renoted 마커. frontmatter 의 나머지는 보존."""
+    note = (VAULT / args.note) if not os.path.isabs(args.note) else pathlib.Path(args.note)
+    if not note.exists():
+        print(json.dumps({"error": f"없음: {note}"}, ensure_ascii=False)); return 1
+    fm_lines, body = _split_front(note)
+    if args.body_file:
+        new_body = pathlib.Path(args.body_file).read_text(encoding="utf-8")
+        if not new_body.strip():
+            print(json.dumps({"error": "본문(--body-file)이 비어 있음"}, ensure_ascii=False)); return 1
+        body = new_body
+    today = __import__("datetime").date.today().isoformat()
+    out_fm, seen_conf, seen_renoted = [], False, False
+    for l in fm_lines:
+        if l.startswith("parse_confidence:"):
+            out_fm.append(f"parse_confidence: {args.confidence}"); seen_conf = True
+        elif l.startswith("renoted:"):
+            out_fm.append(f"renoted: {today}"); seen_renoted = True
+        else:
+            out_fm.append(l)
+    if not seen_conf:
+        out_fm.append(f"parse_confidence: {args.confidence}")
+    if not seen_renoted:
+        # 언제 풀텍스트로 다시 맞춰봤는지 — 같은 노트를 매번 다시 태우지 않게 하는 흔적.
+        out_fm.append(f"renoted: {today}")
+    note.write_text("---\n" + "\n".join(out_fm) + "\n---\n" + body.rstrip("\n") + "\n",
+                    encoding="utf-8")
+    print(json.dumps({"ok": True, "note": str(note.relative_to(VAULT)),
+                      "confidence": args.confidence, "body_replaced": bool(args.body_file),
+                      "renoted": today}, ensure_ascii=False))
     return 0
 
 
@@ -635,7 +770,11 @@ def main(argv=None) -> int:
     pc.add_argument("--tags", default="")
     pc.add_argument("--date", default="")
     pc.add_argument("--via", default="")
-    pc.add_argument("--confidence", default="ok", choices=["ok", "low"])
+    # n/a = 파싱할 원본이 애초에 없음(첨부 0 self-forward 등). low(=파싱 실패)와 구분한다 —
+    # 섞으면 고칠 수 없는 건이 매일 '파싱오류'로 보고돼 숫자를 오염시킨다(2026-08-05).
+    pc.add_argument("--confidence", default="ok", choices=["ok", "low", "n/a"])
+    pc.add_argument("--source-missing", dest="source_missing", action="store_true",
+                    help="원본 첨부가 0건(포워드에 본문·첨부 미포함) — parse 대상 자체가 없음")
     pc.add_argument("--doc-status", dest="doc_status", default="final", choices=["final", "interim"],
                     help="final=확정본(full 요약·정본) / interim=초안·준비·중간본(source-trail, 요약 생략)")
     pc.add_argument("--superseded-by", dest="superseded_by", default="",
@@ -644,6 +783,13 @@ def main(argv=None) -> int:
     pau = sub.add_parser("audit")
     pau.add_argument("--inmaek-only", dest="inmaek_only", action="store_true",
                      help="인맥 잠정(gcontacts_review: flagged) 만 — 금요일 인맥 브리핑 입력")
+    sub.add_parser("renote-scan")
+    prr = sub.add_parser("renote-read"); prr.add_argument("note")
+    prw = sub.add_parser("renote-write")
+    prw.add_argument("note")
+    prw.add_argument("--body-file", dest="body_file", default="",
+                     help="새 본문(생략하면 본문 유지하고 플래그만 갱신)")
+    prw.add_argument("--confidence", default="ok", choices=["ok", "low"])
     pcon = sub.add_parser("contacts"); pcon.add_argument("item")
     ple = sub.add_parser("link-event")
     ple.add_argument("event", help="이벤트 노트 stem (= 동반 노트 --name)")
@@ -662,6 +808,8 @@ def main(argv=None) -> int:
     pnp.add_argument("--review", default="", help="잠정 마커 사유 (자동 트랙 생성 시) — 값 있으면 gcontacts_review: flagged + 금요일 검토")
     args = ap.parse_args(argv)
     return {"scan": cmd_scan, "inspect": cmd_inspect, "commit": cmd_commit, "audit": cmd_audit,
+            "renote-scan": cmd_renote_scan, "renote-read": cmd_renote_read,
+            "renote-write": cmd_renote_write,
             "contacts": cmd_contacts, "link-event": cmd_link_event, "new-person": cmd_new_person}[args.cmd](args)
 
 
