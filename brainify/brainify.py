@@ -509,9 +509,16 @@ def cmd_renote_scan(_args) -> int:
             "targets": tg,
             # 붙어 있는 _parse 가 하나라도 있고 그 전부가 refined 면 재작성 재료가 갖춰진 것.
             "ready": bool(tg) and all(t["ready"] for t in tg),
+            # ★ 붙은 _parse 가 0 = **영원히 ready 가 될 수 없다**(파싱할 파일 자체가 없음).
+            #   'refine 대기'와 겉모습이 같아 조용히 영구 잔류한다 — 2026-08-05 실측에서
+            #   첨부 0 스레드 3건이 매 보고마다 '파싱오류'로 떴다. 그 오분류는 low 가 아니라
+            #   n/a(+필요시 source_missing)로 바로잡아야 하므로 여기서 따로 표시한다.
+            "no_source": not tg,
         })
     ready = [i for i in items if i["ready"]]
-    print(json.dumps({"count": len(items), "pending": len(ready), "items": items},
+    stuck = [i for i in items if i["no_source"]]
+    print(json.dumps({"count": len(items), "pending": len(ready),
+                      "no_source": len(stuck), "items": items},
                      ensure_ascii=False, indent=2))
     return 0
 

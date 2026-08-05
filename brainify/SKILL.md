@@ -143,6 +143,13 @@ helper 는 `python3 ~/.claude/skills/brainify/brainify.py <subcommand>` 로 호�
 - PARA 좌표가 모호 → 묻지 말고 **가장 그럴듯한 좌표로 낙관 배치 + `--confidence` 와 무관하게
   commit**(helper 가 `para_review: pending` 부착). 교정은 주간 감사가.
 - `via: error`/markdown 비정상·refined.md 부재로 듀얼검증 필요 → `--confidence low` 로 commit(유실 0).
+- **★ 파싱할 대상이 없으면 `low` 가 아니라 `--confidence n/a`** (2026-08-05). `low` 는 *파싱을 시도했는데
+  결과가 부실*하다는 뜻이고, 그래야 나중에 `refined.md` 가 생겼을 때 renote 가 집어간다. 첨부가
+  0건인 스레드(=`_thread.md` 만 있는 self-forward 등)는 애초에 파싱할 파일이 없어 **영원히 풀리지
+  않는 플래그**가 된다 — 실측: IAEA RAS6097 3건이 매 보고마다 "파싱오류"로 떠 숫자를 오염시켰다.
+  - 첨부 0 + **본문은 온전** → `--confidence n/a`. 정상이다. 아무것도 잃지 않았다.
+  - 첨부 0 + **본문도 비어 있음**(헤더뿐) → `--confidence n/a --source-missing`. 이건 진짜 유실.
+  - 첨부 있음 + 파싱 미완·부실 → `--confidence low` (기존 규칙 그대로 — renote 가 나중에 고친다).
 - **회의록·문서 시리즈(확정 vs 중간본, §3-★)**: 확정 여부가 헤드리스로 불확실하면 **보수적으로 `--doc-status interim`**
   (source-trail, 요약 생략) + `para_review: pending` → 주간 감사가 정본 승급. 무인이 초안을 정본으로 적재해 knowledge
   오염시키는 것 방지(clutter < 유실, raw 는 보존됨). 명백한 확정본(회의 후 "회의록" 회람·"확정")만 final 요약.
