@@ -161,6 +161,34 @@ helper 는 `python3 ~/.claude/skills/brainify/brainify.py <subcommand>` 로 호�
 근거: [자동 우선·주간 감사 정책](../../../../projects/2nd-brain-vault/knowledge/02_areas/brain-system/automation-review-policy.md)
 — 건별 승인 폐기 = 낙관 배치 + 플래그 + 주간 감사. 헤드리스는 이 정책의 구현이다.
 
+## 모드 4 — 대기실 (`_hold`, 2026-08-07 신설) ★ 손으로 떨어뜨린 자료
+
+**트리거**: "hold 처리해줘" · "_hold 에 넣은 거 브레인화해줘" · "대기실 정리해줘" · "내가 넣은 자료 정리해줘".
+
+`sources/00_inbox/_hold/` 는 **Dr. Ben 이 손으로 떨어뜨리고 지시할 때까지 아무도 건드리지 않는 자리**다.
+brain-drain 은 종료 2분 뒤 재발화하므로, 인박스에 그냥 두면 지시를 타이핑하는 사이에 무인 편입돼
+맥락 없이 낙관 배치된다(그리고 복사 중인 큰 파일을 잘린 채로 집을 수도 있다). `_hold` 는 그 창을 없앤다.
+
+- **양쪽 드레인이 제외한다** — `brainify.py _items()` 와 `parser-drain.sh candidates()` 둘 다.
+  그래서 파싱조차 미리 돌지 않는다.
+- **처리는 대기실을 인박스로 지목해서** 한다. 특수 분기 없이 스킬 전체가 그대로 돈다:
+
+```bash
+H="$BRAINIFY_VAULT/sources/00_inbox/_hold"        # 기본 vault 면 ~/projects/2nd-brain-vault
+BRAINIFY_INBOX="$H" python3 brainify.py scan
+BRAINIFY_INBOX="$H" python3 brainify.py inspect "<item>"
+BRAINIFY_INBOX="$H" python3 brainify.py commit  "<item>" --para … --name … --body-file …
+```
+
+- ★ **`_hold` 에서 `00_inbox` 로 옮기지 말 것.** 옮기는 순간 무인 드레인의 2분 창이 다시 열린다.
+  `commit` 이 `_hold` 에서 **최종 PARA 위치로 직행**한다.
+- ★ **여기서는 물어봐도 된다.** 헤드리스와 정반대다 — Dr. Ben 이 옆에 있고, 애초에 *맥락을 주려고*
+  대기실에 넣은 것이다. PARA 좌표·묶음 단위·제목이 모호하면 낙관 배치하지 말고 **확인**한다.
+- 여러 파일을 **한 사안으로** 지시받으면 한 폴더로 묶어 노트 1개로 편입한다(낱개 N개 ✗).
+- 처리 후 `_hold` 는 비운다. 남기면 다음 지시 때 뭐가 새 것인지 알 수 없다.
+- 방치 감시: 아침 헬스체크의 `인박스 _hold 대기` 항목이 건수·최고령을 보고하고 7일 넘으면 `[!]`.
+  드레인이 일부러 안 보는 자리라 **아무도 안 알려주면 그대로 사장되기 때문**이다.
+
 ## 모드 3 — 재작성 (`/brainify --renote "<note>"`, 2026-08-05 신설)
 
 **뒤늦게 도착한 풀텍스트로 stub 노트를 다시 맞춘다.** `parse_confidence: low` 는 "노트를 쓸 때

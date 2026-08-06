@@ -32,7 +32,16 @@ import subprocess
 import sys
 
 VAULT = pathlib.Path(os.path.expanduser(os.environ.get("BRAINIFY_VAULT", "~/projects/2nd-brain-vault")))
-INBOX = VAULT / "sources" / "00_inbox"
+# 처리 대상 인박스. env 로 갈아끼울 수 있다 — `_hold` 대기실을 처리할 때 쓴다(2026-08-07).
+#   BRAINIFY_INBOX=<vault>/sources/00_inbox/_hold python3 brainify.py scan|inspect|commit
+# INBOX 는 scan·inspect·commit·prune 이 모두 참조하는 단일 상수라, 이 한 줄만 뚫으면 스킬
+# 전체가 그대로 대기실에서 동작한다(특수 분기 0). commit 은 `_hold` 에서 최종 PARA 위치로
+# **직행**한다 — 00_inbox 로 되돌리면 무인 드레인의 2분 창이 다시 열리기 때문이다.
+INBOX = pathlib.Path(os.path.expanduser(
+    os.environ.get("BRAINIFY_INBOX", str(VAULT / "sources" / "00_inbox"))))
+# 대기실 이름 — 무인 처리에서 제외할 하위 폴더(아래 _items). Dr. Ben 이 손으로 떨어뜨리고
+# **지시할 때까지 아무도 건드리면 안 되는** 자리다.
+HOLD = "_hold"
 KNOWLEDGE = VAULT / "knowledge"
 SOURCES = VAULT / "sources"
 INMAEK = KNOWLEDGE / "02_areas" / "인맥"   # 인맥(관계 맥락) 허브 노트 폴더
@@ -265,6 +274,11 @@ def _items() -> list[dict]:
         return out
     for p in sorted(INBOX.iterdir()):
         if p.name.startswith(".") or p.name.endswith("_parse"):
+            continue
+        # `_hold` = Dr. Ben 이 손으로 떨어뜨린 뒤 **지시할 때까지 기다리는** 대기실.
+        # 무인 드레인이 집으면 맥락 없이 낙관 배치돼 버린다(브레인드레인 재발화 2분).
+        # BRAINIFY_INBOX 로 대기실 자체를 인박스로 지목했을 때만 그 안을 본다.
+        if p.name == HOLD and p.is_dir():
             continue
         if p.is_dir():
             if (p / "_thread.md").exists():
