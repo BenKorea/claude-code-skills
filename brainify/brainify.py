@@ -7,6 +7,7 @@
   commit  <item> ...   원본을 sources/<para>/<name>/ 로 이동 + knowledge/<para>/<name>.md
                        동반 노트(frontmatter+본문) 작성 + 정책 플래그 + inbox 비움.
   audit                플래그된(para_review:pending / parse_confidence:low) 노트 나열.
+  prune-inbox          편입 끝났는데 인박스에 남은 중복 재캡처 정리(편입본이 인박스본을 포함할 때만).
   renote-scan          refined.md 가 뒤늦게 생긴 parse_confidence:low 노트 나열(재작성 후보).
   renote-read  <note>  재작성 재료: 기존 노트 + refined.md 전문 + _thread.md.
   renote-write <note>  본문 교체(--body-file, 생략 가능) + parse_confidence 갱신 + renoted 마커.
@@ -448,6 +449,87 @@ def cmd_audit(args) -> int:
     return 0
 
 
+# ── prune-inbox: 편입이 끝났는데 인박스에 남은 *중복 재캡처* 정리 ─────────────
+#
+# 같은 스레드가 다시 캡처되면 인박스에 새 폴더가 생기는데, scan 이 already_brainified 로
+# 판정하고 드레인 Phase B 는 그 항목을 **건너뛰기만** 한다 — 치우는 주체가 없어 영원히 쌓인다
+# (2026-08-06 실측: 인박스 13개 중 4개가 이런 잔재였다). 편입 자체는 정상이라 데이터 손실은
+# 없고, 인박스가 조용히 불어나 '적체'로 보이는 게 피해다.
+#
+# 🚨 **무인 드레인에서 도는 비가역 삭제**라 게이트를 겹으로 둔다. 하나라도 안 맞으면 남긴다:
+#   ① scan 이 already_brainified 로 판정한 항목만 (PENDING·stale 은 절대 손대지 않음)
+#   ② 그 항목의 노트가 있고, 노트의 `sources:` 가 가리키는 편입본 폴더가 **실재**
+#   ③ 편입본이 00_inbox 밖에 있고 자기 자신이 아님
+#   ④ 인박스본의 모든 파일이 편입본에 **같은 이름·같은 내용으로 존재**(⊆). 인박스에만 있는
+#      파일이 하나라도 있으면 남긴다 — 그건 잔재가 아니라 아직 반영 안 된 새 내용이다.
+# 남긴 것은 이유와 함께 보고한다 — 조용히 빠지면 "정리 끝"으로 오독된다.
+def _file_map(d: pathlib.Path) -> dict[str, str]:
+    """폴더 **바로 아래 파일들**의 {이름: 내용 sha256}.
+
+    하위 `*_parse/` 는 일부러 뺀다 — 파싱 파생물이라 한쪽에만 있을 수 있고, 원본이 같으면
+    언제든 다시 만들 수 있다. 판정의 근거는 *원본이 같은가* 이지 파생물 상태가 아니다.
+    """
+    return {p.name: hashlib.sha256(p.read_bytes()).hexdigest()
+            for p in d.iterdir() if p.is_file()}
+
+
+def _is_subset(inbox: pathlib.Path, filed: pathlib.Path) -> bool:
+    """인박스본의 모든 파일이 편입본에 **같은 이름·같은 내용**으로 존재하는가.
+
+    동일(=)이 아니라 부분집합(⊆)을 기준으로 삼는다. 편입본이 더 많은 건 정상이다 —
+    commit 이 `_actions.json` 같은 파생 산출을 얹거나, 뒤이어 온 첨부가 편입본에만
+    추가되기 때문(2026-08-06 실측: 인박스 20 ⊂ 편입본 22). 부분집합이면 인박스본을 지워도
+    **잃는 바이트가 0** 이다. 반대로 인박스에만 있는 파일이 하나라도 있으면 그건 잔재가
+    아니라 아직 반영 안 된 새 내용이므로 절대 지우지 않는다.
+    """
+    a, b = _file_map(inbox), _file_map(filed)
+    return bool(a) and all(b.get(name) == h for name, h in a.items())
+
+
+def _filed_dir_of(note_paths: list[str], item: pathlib.Path) -> pathlib.Path | None:
+    """매칭된 노트들의 `sources:` 중 실재하는 편입본 폴더 하나. 없으면 None."""
+    for n in note_paths:
+        fm = _front(pathlib.Path(n))
+        rel = (fm.get("sources") or "").strip().strip('"').rstrip("/")
+        if not rel:
+            continue
+        cand = VAULT / rel
+        if not cand.is_dir() or cand == item:
+            continue
+        if INBOX == cand or INBOX in cand.parents:   # 편입본이 인박스 안 = 편입 미완
+            continue
+        return cand
+    return None
+
+
+def cmd_prune_inbox(args) -> int:
+    removed, kept = [], []
+    for it in _items():
+        it.update(_dedup(it["identifier"], it.get("message_count", 0)))
+        item = INBOX / it["item"]
+        if not it.get("already_brainified"):
+            kept.append({"item": it["item"], "reason": "미편입(PENDING·stale)"}); continue
+        if not item.is_dir():
+            kept.append({"item": it["item"], "reason": "폴더 아님(낱개 파일)"}); continue
+        filed = _filed_dir_of(it.get("existing_notes", []), item)
+        if filed is None:
+            kept.append({"item": it["item"], "reason": "편입본 폴더 미해결"}); continue
+        try:
+            covered = _is_subset(item, filed)
+        except Exception as e:
+            kept.append({"item": it["item"], "reason": f"해시 실패: {e}"}); continue
+        if not covered:
+            kept.append({"item": it["item"],
+                         "reason": "인박스에만 있는 파일 존재 — 미반영 새 내용일 수 있음"}); continue
+        if not args.dry_run:
+            shutil.rmtree(item)
+        removed.append({"item": it["item"], "filed": str(filed.relative_to(VAULT))})
+    print(json.dumps({"dry_run": bool(args.dry_run), "removed": len(removed),
+                      "kept": len(kept), "removed_items": removed, "kept_items": kept},
+                     ensure_ascii=False, indent=2))
+    return 0
+
+
 # ── renote: 뒤늦게 도착한 풀텍스트로 stub 노트 재작성 ─────────────────────────
 #
 # parse_confidence:low 는 "노트를 쓸 때 refined.md 가 없었다"는 뜻이다(parse_via: pending-ocr 등).
@@ -790,6 +872,9 @@ def main(argv=None) -> int:
     pau = sub.add_parser("audit")
     pau.add_argument("--inmaek-only", dest="inmaek_only", action="store_true",
                      help="인맥 잠정(gcontacts_review: flagged) 만 — 금요일 인맥 브리핑 입력")
+    ppi = sub.add_parser("prune-inbox")
+    ppi.add_argument("--dry-run", dest="dry_run", action="store_true",
+                     help="지울 목록만 출력(삭제 안 함)")
     sub.add_parser("renote-scan")
     prr = sub.add_parser("renote-read"); prr.add_argument("note")
     prw = sub.add_parser("renote-write")
@@ -815,7 +900,7 @@ def main(argv=None) -> int:
     pnp.add_argument("--review", default="", help="잠정 마커 사유 (자동 트랙 생성 시) — 값 있으면 gcontacts_review: flagged + 금요일 검토")
     args = ap.parse_args(argv)
     return {"scan": cmd_scan, "inspect": cmd_inspect, "commit": cmd_commit, "audit": cmd_audit,
-            "renote-scan": cmd_renote_scan, "renote-read": cmd_renote_read,
+            "prune-inbox": cmd_prune_inbox, "renote-scan": cmd_renote_scan, "renote-read": cmd_renote_read,
             "renote-write": cmd_renote_write,
             "contacts": cmd_contacts, "link-event": cmd_link_event, "new-person": cmd_new_person}[args.cmd](args)
 
