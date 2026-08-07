@@ -65,7 +65,7 @@ helper 는 `python3 ~/.claude/skills/brainify/brainify.py <subcommand>` 로 호�
      (예 `의학위원회`·`이사회`·`2026_춘계학술대회`·`보험관련`·`경영공시`). **2단계 상한** — 더 깊게 중첩 금지.
      *기능 영역*(`finance`·`이력`·`인맥`·`brain-system`·`pc-hygiene`·`RPythonStudy`)은 제외 — 영역 레벨 그대로.
      - **우선순위**: ① `ls 02_areas/<조직>/` 로 기존 하위폴더 확인 → 주제에 명백히 맞는 *가장 깊은 기존* 폴더 재사용
-       (예 의학위원회 메일 → 기존 `의학위원회/`). ② *(Phase 2 자리 — Google Drive 폴더 매니페스트 참조, 미구현)* ③ 없으면 LLM 추론.
+       (예 의학위원회 메일 → 기존 `의학위원회/`). ② **Drive 폴더 어휘 대조** — [`02_areas/brain-system/drive-folder-vocabulary.md`](../../../../projects/2nd-brain-vault/knowledge/02_areas/brain-system/drive-folder-vocabulary.md) 를 grep. Dr. Ben 이 vault 이전부터 Google Drive 에서 써 온 분류 어휘(3단계 스냅샷)다. **같은 뜻의 폴더가 이미 있으면 그 말을 쓴다** — 새 이름을 지어내지 않는다. 예: Drive 에 `KIRAMS/방사선안전관리` 가 있으면 `방사선안전관리업무`·`방사선안전` 같은 변형을 새로 만들지 않는다. **목적은 머릿속 지도를 한 벌로 유지하는 것** — vault 가 다른 말을 쓰면 Dr. Ben 이 두 어휘를 오가야 하고 그게 인지부하다. ③ 어휘에도 없으면 LLM 추론(그때는 새 이름을 짓되 대장에 기록).
      - **생성 권한 (cron 얇게 / audit 깊게)**: *기존* 폴더 재사용은 **모든 실행 허용**(헤드리스 포함, 위험 0).
        **새 하위폴더 생성은 대화형 실행(Dr. Ben 동석)에서만** — 무인·헤드리스(§아래 헤드리스)는 새 폴더 금지,
        **가장 가까운 기존 상위(조직 레벨)에 배치** + frontmatter `new_subfolder_suggested: <제안 경로>` + `para_review: pending` 플래그 → 주간 감사가 생성·이동.
