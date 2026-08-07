@@ -54,6 +54,9 @@ helper 는 `python3 ~/.claude/skills/brainify/brainify.py <subcommand>` 로 호�
      - 따라서 **parser-drain 이 xlsx 를 정상 파싱**하고 brainify 는 그 `refined.md` 를 쓴다.
      - **docling 폴백 = `xlsx_refine.py`** (2nd-brain repo, stdlib only): docling 이 멀쩡한 엑셀을 못 읽는 경우가 실재한다(실측 2건 — `ZeroDivisionError`, `ConversionError`; 둘 다 zip·시트·sharedStrings 정상). 파서 한계이지 파일 결함이 아니므로 `.parse-error` 로 방치하지 않고 stdlib 추출로 `refined.md` 를 만든다(`base_engine: xlsx-stdlib`).
      - `refined.md` 가 아직 없을 때만 `via: skipped-xlsx` 가 나온다 — 이제 그건 *정책*이 아니라 **아직 파싱 전**이라는 뜻이다. 급하면 경량 추출(`zipfile` → `sharedStrings.xml`)로 즉시 파악한다(Read 도구는 xlsx 렌더 못 함).
+   - **★ .xls(구형 엑셀)도 파싱한다 (2026-08-07 신설)**: `.xls` 는 **컨테이너를 안 탄다** — docling 이 입력으로 안 받고, 호스트 soffice 는 **libreoffice-calc 미설치**로 `no export filter`, 컨테이너엔 soffice 자체가 없다. apt 설치는 kimbi 만 되고 ai4lt·컨테이너는 조용히 실패하는 비대칭이라, parser-drain 이 hwp 와 같은 **호스트-측 stdlib 경로**(`xls_refine.py` — CFB+BIFF 직독)로 `refined.md` 를 직접 만든다(`base_engine: xls-stdlib`).
+     - **확장자가 .xls 라고 다 엑셀이 아니다.** 관공서 웹시스템은 HTML `<table>` 을 그대로 .xls 로 내려준다(실측: 양천구 재산세). 매직바이트로 갈라 HTML 이면 `<table>` 직독(`xls-html-stdlib`). soffice 의 `source file could not be loaded` 는 이 부류에서 **필터 부재가 아니라 진짜로 엑셀이 아니라서** 나온다 — 두 에러 메시지를 구별할 것.
+     - frontmatter `refine_confidence: low` + `warning: SST 문자열 N/M 만 복원` 이 보이면 **셀이 조용히 비어 있을 수 있다**(BIFF 의 CONTINUE 경계 처리 한계). 그 노트는 원본 대조 후 쓴다.
    - **★ 방대 reference PDF docling 제외 (backfill 동일, 페이지 우선 개정 2026-06-07)**: **페이지 ≥ 100(우선) OR 이름패턴**(`초록집·자료집·proceedings·abstract·논문집·카탈로그·book`) OR **(페이지 미상 시만) 크기 ≥ 20MB** → inspect 가 docling fallback 안 하고 `via: skipped-bulk (<reason>)` 반환(*저가치·timeout 회피*). → 노트는 **메타만**(행사·발표 N·본인 발표 위치), 정본 `parse: skipped-bulk`, PDF 보존, **필요 페이지만 on-demand `Read`**(멀티모달 `pages:"120-122"`). 정말 전체 필요 시 `/backfill ... --force-bulk` 또는 수동.
 3. **판단 (LLM — 여기가 이 스킬의 핵심)**: inspect 결과를 읽고 결정한다. (`via: skipped-bulk|skipped-xlsx` 면 위 §2-★ 대로 메타/경량추출 처리.)
    - **PARA 좌표**: `01_projects/<폴더>` · `02_areas/<영역>` · `03_resources/<주제>` ·
