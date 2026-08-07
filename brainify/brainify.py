@@ -182,6 +182,8 @@ def _refined(host_path: pathlib.Path) -> dict | None:
 # ── 파싱 제외 정책 (backfill 과 동일 — 권위: backfill SKILL.md/backfill.py) ──
 BULK_PAGES = 100             # 방대 reference PDF auto-parse 제외 임계(페이지)
 BULK_MB = 20                 # 방대 제외 임계(MB)
+BULK_NAME_PAGES = int(os.environ.get("BRAINIFY_BULK_NAME_PAGES", "40"))   # 이름패턴 완화 하한
+BULK_NAME_MB = float(os.environ.get("BRAINIFY_BULK_NAME_MB", "8"))
 BULK_NAME = re.compile(r"(?i)초록집|자료집|proceedings|abstract|논문집|카탈로그|catalog|book")
 
 
@@ -197,17 +199,30 @@ def _pdf_pages(p: pathlib.Path):
 
 
 def _is_bulk(f: pathlib.Path):
-    """방대 reference 판정 → (bool, reason). 이름패턴(전 포맷) OR PDF(페이지≥100 또는 크기≥20MB)."""
-    m = BULK_NAME.search(f.name)
-    if m:
-        return True, f"이름패턴({m.group()})"
-    if f.suffix.lower() == ".pdf":
-        pg = _pdf_pages(f)
-        if pg is not None:                       # 페이지 primary(고해상 스캔 size 무관)
-            if pg >= BULK_PAGES:
-                return True, f"{pg}p≥{BULK_PAGES}p"
-        elif f.stat().st_size / 1048576 >= BULK_MB:   # 페이지 미상 → size fallback
-            return True, f"{f.stat().st_size/1048576:.0f}MB≥{BULK_MB}MB(페이지 미상)"
+    """방대 reference 판정 → (bool, reason).
+
+    (페이지≥BULK_PAGES) OR (크기≥BULK_MB) OR (이름패턴 AND 규모 하한).
+
+    ★ 이름패턴 단독 발동을 폐기했다 (2026-08-07). 초판은 파일명에 초록집·book 등이 있으면
+    크기·페이지와 무관하게 제외했는데, `AOFNMB Series of Books 관련 Korea chapter 저자 추천.pdf`
+    — **94KB·5페이지** 문서가 "Books" 하나로 걸렸다. 게이트의 취지는 1,400페이지짜리를 GPU 에서
+    빼는 것이지 제목에 book 이 든 짧은 문서를 버리는 게 아니다. 이름은 *힌트*고 방대함의 근거는
+    규모다 — 이름패턴은 이제 문턱을 낮춰줄 뿐(경계선 구간), 하한을 못 넘으면 발동하지 않는다.
+    parser-drain 의 is_bulk() 와 같은 기준이어야 한다(두 단계가 다른 잣대를 쓰면 그게 버그).
+    """
+    named = BULK_NAME.search(f.name)
+    pg = _pdf_pages(f) if f.suffix.lower() == ".pdf" else None
+    mb = f.stat().st_size / 1048576
+    if pg is not None:                           # 페이지 primary(고해상 스캔 size 무관)
+        if pg >= BULK_PAGES:
+            return True, f"{pg}p≥{BULK_PAGES}p"
+        if named and pg >= BULK_NAME_PAGES:
+            return True, f"이름패턴({named.group()})+{pg}p≥{BULK_NAME_PAGES}p"
+    else:                                        # 페이지 미상 → size fallback
+        if mb >= BULK_MB:
+            return True, f"{mb:.0f}MB≥{BULK_MB}MB(페이지 미상)"
+        if named and mb >= BULK_NAME_MB:
+            return True, f"이름패턴({named.group()})+{mb:.0f}MB≥{BULK_NAME_MB}MB(페이지 미상)"
     return False, ""
 
 
