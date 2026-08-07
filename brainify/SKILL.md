@@ -50,8 +50,10 @@ helper 는 `python3 ~/.claude/skills/brainify/brainify.py <subcommand>` 로 호�
      refined 부재 시 `via: pending-transcription` → docling fallback 금지, parser-drain 대기(전사는 whisper venv 머신=kimbi 전용).
      **선별 게이트**: 폰 녹음은 전사까지 *자동*, PARA 편입은 *이 스킬 실행(=Dr. Ben 지시)* 시점 — 사적·무가치 녹음은 편입 대신 삭제 제안.
      노트 본문에는 전사 전문 덤프 금지(요약·핵심·행동 항목), 전문은 refined.md 가 raw 층으로 보존.
-   - **★ xlsx 등 데이터 스프레드시트는 docling `_parse` 생략 (2026-06-07)**: 명단·시트류는 *구조화 데이터 자체가 값* — full-text 파싱 가치 낮음. `_parse` 미동반이 정상(없어도 `via: error` 아님).
-     - **파악 경로 = 경량 stdlib 추출** (Read 도구는 xlsx 렌더 못 함 → "그냥 Read" 안 됨): `python3 -c "import zipfile,re; print(re.findall(r'<t[^>]*>([^<]*)</t>', zipfile.ZipFile('<xlsx>').read('xl/sharedStrings.xml').decode('utf-8','ignore')))"` 로 셀 텍스트 즉시 추출(deps·모델·docker 0). 정밀 셀 위치 필요 시만 `xl/worksheets/sheet*.xml` 조인. → 그 내용을 노트 본문 표로 정리. (inspect `via: skipped-xlsx`)
+   - **★ xlsx 는 파싱한다 (2026-08-07 개정 — 구 "생략" 정책 폐기)**: 2026-06-07 엔 "명단·시트류는 구조화 데이터 자체가 값이라 full-text 파싱 가치 낮음" 으로 `_parse` 생략을 정했으나, **실측이 반대였다** — vault xlsx 52개 중 50개가 이미 파싱돼 `refined.md` 가 있었고 **노트 51개가 그 풀텍스트를 근거로 쓰였다**. 게다가 `_parse()` 는 `_refined()` 를 먼저 보므로 refined.md 가 있으면 `skipped-xlsx` 분기에 **도달조차 하지 않아**, 정책이 사실상 죽어 있었다. 비용도 근거가 못 된다(xlsx docling 은 수 초 — 방대 PDF 의 30분과 다르다).
+     - 따라서 **parser-drain 이 xlsx 를 정상 파싱**하고 brainify 는 그 `refined.md` 를 쓴다.
+     - **docling 폴백 = `xlsx_refine.py`** (2nd-brain repo, stdlib only): docling 이 멀쩡한 엑셀을 못 읽는 경우가 실재한다(실측 2건 — `ZeroDivisionError`, `ConversionError`; 둘 다 zip·시트·sharedStrings 정상). 파서 한계이지 파일 결함이 아니므로 `.parse-error` 로 방치하지 않고 stdlib 추출로 `refined.md` 를 만든다(`base_engine: xlsx-stdlib`).
+     - `refined.md` 가 아직 없을 때만 `via: skipped-xlsx` 가 나온다 — 이제 그건 *정책*이 아니라 **아직 파싱 전**이라는 뜻이다. 급하면 경량 추출(`zipfile` → `sharedStrings.xml`)로 즉시 파악한다(Read 도구는 xlsx 렌더 못 함).
    - **★ 방대 reference PDF docling 제외 (backfill 동일, 페이지 우선 개정 2026-06-07)**: **페이지 ≥ 100(우선) OR 이름패턴**(`초록집·자료집·proceedings·abstract·논문집·카탈로그·book`) OR **(페이지 미상 시만) 크기 ≥ 20MB** → inspect 가 docling fallback 안 하고 `via: skipped-bulk (<reason>)` 반환(*저가치·timeout 회피*). → 노트는 **메타만**(행사·발표 N·본인 발표 위치), 정본 `parse: skipped-bulk`, PDF 보존, **필요 페이지만 on-demand `Read`**(멀티모달 `pages:"120-122"`). 정말 전체 필요 시 `/backfill ... --force-bulk` 또는 수동.
 3. **판단 (LLM — 여기가 이 스킬의 핵심)**: inspect 결과를 읽고 결정한다. (`via: skipped-bulk|skipped-xlsx` 면 위 §2-★ 대로 메타/경량추출 처리.)
    - **PARA 좌표**: `01_projects/<폴더>` · `02_areas/<영역>` · `03_resources/<주제>` ·
