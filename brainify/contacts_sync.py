@@ -245,7 +245,16 @@ def build_person(fm: dict, sections: dict, current: dict | None) -> dict:
 
     email = (fm.get("email") or "").strip()
     if email:
-        person["emailAddresses"] = [{"value": email}]
+        # 같은 주소가 이미 있으면 서버가 붙인 라벨(type/formattedType)을 보존한다.
+        # 안 그러면 라벨 있는 연락처가 영원히 plan=update 로 남아 고정점에 못 닿고(멱등 깨짐),
+        # push 하면 라벨만 지워졌다 서버 기본값으로 되살아나는 flapping 이 된다. (2026-08-20 김정영 케이스)
+        prev = next((e for e in (person.get("emailAddresses") or [])
+                     if (e.get("value") or "").strip().lower() == email.lower()), None)
+        entry = {"value": email}
+        for k in ("type", "formattedType"):
+            if prev and prev.get(k):
+                entry[k] = prev[k]
+        person["emailAddresses"] = [entry]
 
     # userDefined: 기존 보존 + 관리키 overlay
     ud = [u for u in (person.get("userDefined") or []) if u.get("key") not in (UD_FIRST, UD_LAST)]
