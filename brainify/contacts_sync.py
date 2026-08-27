@@ -177,19 +177,40 @@ _WIKILINK = re.compile(r"\[\[([^\]]+)\]\]")
 _TASK = re.compile(r"\[task::[^\]]*\]")
 
 
+_ORG_ALIASES = {"KARP": "대한방사선방어학회", "KSNM": "대한핵의학회"}  # 약칭 → 정식명 (중복 판정용)
+
+
+def _norm_role(s: str) -> str:
+    """보직 문자열 정규화 — 괄호 내용 제거·약칭 치환·공백/말미 구두점 제거. 중복 판정용."""
+    s = re.sub(r"\([^)]*\)", "", s)
+    for k, v in _ORG_ALIASES.items():
+        s = s.replace(k, v)
+    return re.sub(r"\s+", "", s).strip().strip(".·;,")
+
+
 def build_biography(fm: dict, sections: dict) -> str:
-    """역할 헤더(secondary_roles) + 교류 로그(본문 `## 교류 이력`). 신원줄 금지(구조화 필드와 중복)."""
+    """역할 헤더(secondary_roles) + 교류 로그(본문 `## 교류 이력`). 신원줄 금지(구조화 필드와 중복).
+    2026-08-27: Career Timeline 보직과 중복되는 secondary_roles 는 헤더에서 제외 —
+    userDefined `보직` 필드가 이미 나르므로 메모 중복 제거 (Dr. Ben 지시)."""
     header_parts = fm.get("secondary_roles") or []
     if isinstance(header_parts, str):
         header_parts = [header_parts] if header_parts else []
-    header = "; ".join(p for p in header_parts if p)
+    role_norms = {_norm_role(r["text"]) for r in parse_roles(sections)}
+    def _dup(part: str) -> bool:
+        n = _norm_role(part)
+        return any(n == rn for rn in role_norms if rn)  # 완전일치만 — 복합 표기(부회장·학술위원장 등)의 초과 정보 보존
+    header = "; ".join(p for p in header_parts if p and not _dup(p))
+    cur_orgs = { _norm_role(_role_org_title(r["text"])[0]) for r in parse_roles(sections) if r["current"] }
     logs: list[str] = []
     for raw in sections.get("교류 이력", []):
         s = raw.strip()
         if not s.startswith("- "):
             continue
         s = s[2:].strip()
+        if "명단 등재" in s and any(o and o in _norm_role(s) for o in cur_orgs):
+            continue  # roster 등재 로그 — 보직 필드에서 유추 가능 (2026-08-27 메모 중복 제거)
         s = _TASK.sub("", s)
+        s = s.replace("**", "").replace("⚠️ ", "")  # 메모는 평문 — 마크다운 강조·경고 이모지 제거 (2026-08-27)
         ev = _WIKILINK.search(s)
         ev_name = ev.group(1).split("|")[0] if ev else ""
         s = _WIKILINK.sub("", s).strip()
@@ -213,6 +234,50 @@ def build_biography(fm: dict, sections: dict) -> str:
     return "\n".join(out).strip()
 
 
+# ── Career Timeline 보직 파서 (2026-08-27 자기만료형) ─────────────────────
+# 형식 (README §본문 섹션 표준 7): "- YYYY-MM-DD <조직> <보직> (임기N년[, 종료 YYYY-MM-DD])"
+# 종료 = 시작 + N년 − 1일 (역년 임기). 임기 없음 = 무기한 현직. 명시 종료가 계산 종료에 우선.
+UD_ROLE = "보직"
+_ROLE_RE = re.compile(
+    r"^-\s+(\d{4}-\d{2}-\d{2})\s+(.+?)"
+    r"(?:\s*\(임기(\d+)년(?:,\s*종료\s+(\d{4}-\d{2}-\d{2}))?\))?\s*$")
+
+
+def parse_roles(sections: dict) -> list[dict]:
+    """Career Timeline 섹션 → [{start, text, term, end, current, raw}]. 플레이스홀더·비정형 줄은 무시."""
+    import datetime as _dt
+    out = []
+    today = _dt.date.today()
+    for line in sections.get("Career Timeline", []):
+        m = _ROLE_RE.match(line.strip())
+        if not m:
+            continue
+        start_s, text, term_s, end_s = m.groups()
+        try:
+            start = _dt.date.fromisoformat(start_s)
+        except ValueError:
+            continue
+        end = None
+        if end_s:
+            end = _dt.date.fromisoformat(end_s)
+        elif term_s:
+            try:
+                end = start.replace(year=start.year + int(term_s)) - _dt.timedelta(days=1)
+            except ValueError:  # 2/29 시작 등
+                end = _dt.date(start.year + int(term_s), start.month, 28)
+        current = start <= today and (end is None or today <= end)
+        out.append({"start": start_s, "text": text.strip(), "term": term_s,
+                    "end": end.isoformat() if end else None, "current": current,
+                    "raw": line.strip().lstrip("- ").strip()})
+    return out
+
+
+def _role_org_title(text: str) -> tuple[str, str]:
+    """보직 텍스트 → (조직, 직책) 휴리스틱: 첫 토큰 = 조직, 나머지 = 직책."""
+    parts = text.split(None, 1)
+    return (parts[0], parts[1]) if len(parts) == 2 else (text, "")
+
+
 # ── Person JSON 빌드 ───────────────────────────────────────────────────────
 REQUIRED = ["contacts_display_name", "email", "organization", "title_role"]
 
@@ -233,6 +298,8 @@ def build_person(fm: dict, sections: dict, current: dict | None) -> dict:
     org_name = (fm.get("organization") or "").strip()
     dept = (fm.get("department") or "").strip()
     role = (fm.get("title_role") or "").strip()
+    # organizations = 원직장·본직 1개만 (2026-08-27 재검토: 학회 보직의 org 복수 투영은
+    # userDefined `보직` 과 중복 + "회사가 둘"로 읽혀 철회 — 학회 보직은 맞춤입력란 전용)
     if org_name or dept or role:
         org_obj = {}
         if org_name:
@@ -242,6 +309,7 @@ def build_person(fm: dict, sections: dict, current: dict | None) -> dict:
         if role:
             org_obj["title"] = role
         person["organizations"] = [org_obj]
+    roles = parse_roles(sections)  # → userDefined `보직` 투영에 사용
 
     email = (fm.get("email") or "").strip()
     if email:
@@ -257,7 +325,9 @@ def build_person(fm: dict, sections: dict, current: dict | None) -> dict:
         person["emailAddresses"] = [entry]
 
     # userDefined: 기존 보존 + 관리키 overlay
-    ud = [u for u in (person.get("userDefined") or []) if u.get("key") not in (UD_FIRST, UD_LAST)]
+    ud = [u for u in (person.get("userDefined") or []) if u.get("key") not in (UD_FIRST, UD_LAST, UD_ROLE)]
+    for r in roles:  # 보직 이력 전체 → userDefined 반복 키 (gog 가 events 미지원이라 이 경로 — README 2026-08-27)
+        ud.append({"key": UD_ROLE, "value": r["raw"]})
     first = (fm.get("gcontacts_first_registered") or fm.get("first_encounter") or "").strip()
     last = (fm.get("last_interaction") or "").strip()
     if first:
@@ -270,6 +340,8 @@ def build_person(fm: dict, sections: dict, current: dict | None) -> dict:
     bio = build_biography(fm, sections)
     if bio:
         person["biographies"] = [{"value": bio, "contentType": "TEXT_PLAIN"}]
+    else:
+        person["biographies"] = []  # 빈 리스트 명시 push — 키 제거는 gog 마스크에 안 잡혀 라이브 잔존 (2026-08-27 실측 수정)
     return person
 
 
@@ -278,6 +350,9 @@ def _comparable(person: dict) -> dict:
     p = copy.deepcopy(person)
     for k in ("etag", "metadata", "resourceName", "displayName", "displayNameLastFirst"):
         p.pop(k, None)
+    for arr in ("biographies",):  # 빈 배열 = 부재 (멱등 비교용)
+        if not p.get(arr):
+            p.pop(arr, None)
     for arr in ("names", "organizations", "emailAddresses", "userDefined", "biographies", "phoneNumbers"):
         for item in p.get(arr, []) or []:
             item.pop("metadata", None)
@@ -319,7 +394,11 @@ def do_create(fm: dict) -> tuple[str | None, dict]:
     if r.returncode != 0:
         return None, {"ok": False, "stderr": r.stderr[-500:]}
     try:
-        cid = json.loads(r.stdout).get("resourceName")
+        j = json.loads(r.stdout)
+        cid = j.get("resourceName") or (j.get("contact") or {}).get("resourceName")
+        if not cid:  # 봉투 내 metadata.sources[].id (hex) → people/c<decimal> (2026-08-27 봉투 버그 수정)
+            src = (((j.get("contact") or {}).get("metadata") or {}).get("sources") or [{}])[0].get("id")
+            cid = f"people/c{int(src, 16)}" if src else None
     except Exception:
         cid = None
     return cid, {"ok": bool(cid), "stdout": r.stdout[-300:]}
