@@ -3,11 +3,23 @@
   "mcpServers": {
     "hwp-mcp": {
       "command": "uvx",
-      "args": ["--from", "hwp-mcp", "hwp-mcp"]
+      "args": [
+        "--with",
+        "mcp<2",
+        "--from",
+        "hwp-mcp",
+        "hwp-mcp"
+      ]
     },
     "legalize-mcp": {
       "command": "uvx",
-      "args": ["--from", "legalize-cli[mcp]", "legalize-mcp"]
+      "args": [
+        "--with",
+        "mcp<2",
+        "--from",
+        "legalize-cli[mcp]",
+        "legalize-mcp"
+      ]
     }
   }
 }
