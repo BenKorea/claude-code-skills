@@ -200,6 +200,7 @@ BRAINIFY_INBOX="$H" python3 brainify.py commit  "<item>" --para … --name … -
 - 처리 후 `_hold` 는 비운다. 남기면 다음 지시 때 뭐가 새 것인지 알 수 없다.
 - 방치 감시: 아침 헬스체크의 `인박스 _hold 대기` 항목이 건수·최고령을 보고하고 7일 넘으면 `[!]`.
   드레인이 일부러 안 보는 자리라 **아무도 안 알려주면 그대로 사장되기 때문**이다.
+- ⚠️ **`_hold` 의 사람 사진(명함·KIRAMS 원내 직원검색 스크린샷)은 이 모드 4 가 아니라 `contact-capture` 스킬** (2026-09-07 신설) 이 담당 — 노트 작성뿐 아니라 `contacts_sync.py`(전화 가독성 표기 포함) + `contacts_photo.py`(사진 업로드, 성공 검증 후 원본 삭제)까지 한 번에 처리한다. PARA 문서(PDF·hwp·메일)만 이 모드 4 로.
 
 ## 모드 3 — 재작성 (`/brainify --renote "<note>"`, 2026-08-05 신설)
 

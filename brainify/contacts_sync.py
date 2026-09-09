@@ -278,6 +278,49 @@ def _role_org_title(text: str) -> tuple[str, str]:
     return (parts[0], parts[1]) if len(parts) == 2 else (text, "")
 
 
+def _phone_digits(s: str) -> str:
+    return re.sub(r"\D", "", s or "")
+
+
+_MOBILE_PREFIXES = ("010", "011", "016", "017", "018", "019")
+
+
+def format_kr_phone(raw: str) -> str:
+    """frontmatter 의 E.164(`+82...`) 또는 이미 하이픈 표기인 번호 → 하이픈 로컬표기.
+    Google Contacts 는 우리가 보낸 `value` 문자열을 그대로 표시에 쓴다(canonicalForm 은 별도 자동계산) —
+    E.164 를 그대로 보내면 폰에 `+82229701615` 처럼 못 읽는 형태로 뜬다(2026-09-07 Dr. Ben 지적).
+    Push 직전 이 함수로 변환해 `02-970-1615`/`010-2802-4716` 처럼 보이게 한다."""
+    digits = _phone_digits(raw)
+    if not digits:
+        return raw
+    local = "0" + digits[2:] if digits.startswith("82") else digits
+    n = len(local)
+    if local[:3] in _MOBILE_PREFIXES and n == 11:
+        return f"{local[:3]}-{local[3:7]}-{local[7:]}"
+    if local.startswith("02"):
+        if n == 9:
+            return f"{local[:2]}-{local[2:5]}-{local[5:]}"
+        if n == 10:
+            return f"{local[:2]}-{local[2:6]}-{local[6:]}"
+    if n == 10:
+        return f"{local[:3]}-{local[3:6]}-{local[6:]}"
+    if n == 11:
+        return f"{local[:3]}-{local[3:7]}-{local[7:]}"
+    return raw  # 판별 불가 형식 — 원문 그대로(과편집 방지)
+
+
+def _phone_match(entry: dict, phone: str) -> bool:
+    """entry(기존 phoneNumbers 항목)가 frontmatter phone 과 같은 번호인지 — 국가코드 표기차 흡수(끝 9자리 비교)."""
+    target = _phone_digits(phone)[-9:]
+    if not target:
+        return False
+    for key in ("canonicalForm", "value"):
+        v = _phone_digits(entry.get(key) or "")[-9:]
+        if v and v == target:
+            return True
+    return False
+
+
 # ── Person JSON 빌드 ───────────────────────────────────────────────────────
 REQUIRED = ["contacts_display_name", "email", "organization", "title_role"]
 
@@ -323,6 +366,27 @@ def build_person(fm: dict, sections: dict, current: dict | None) -> dict:
             if prev and prev.get(k):
                 entry[k] = prev[k]
         person["emailAddresses"] = [entry]
+
+    # phoneNumbers: frontmatter `phone`(휴대폰) + `phone_office`(원내/직장 유선) 각각 독립 관리 항목.
+    # email 과 달리 phoneNumbers 는 배열이라 항목 단위로 overlay — 우리가 안 만지는 기존 번호(제3의 팩스 등)는 보존.
+    PHONE_FIELDS = (("phone", "mobile"), ("phone_office", "work"))
+    existing = list(person.get("phoneNumbers") or [])
+    claimed_ids: set[int] = set()
+    managed: list = []
+    for key, ptype in PHONE_FIELDS:
+        val = (fm.get(key) or "").strip()
+        if not val:
+            continue
+        prev = next((p for p in existing if id(p) not in claimed_ids and _phone_match(p, val)), None)
+        entry = {"value": format_kr_phone(val), "type": ptype}
+        if prev and prev.get("formattedType"):
+            entry["formattedType"] = prev["formattedType"]
+        if prev:
+            claimed_ids.add(id(prev))
+        managed.append(entry)
+    if managed:
+        others = [p for p in existing if id(p) not in claimed_ids]
+        person["phoneNumbers"] = managed + others
 
     # userDefined: 기존 보존 + 관리키 overlay
     ud = [u for u in (person.get("userDefined") or []) if u.get("key") not in (UD_FIRST, UD_LAST, UD_ROLE)]
@@ -405,28 +469,32 @@ def do_create(fm: dict) -> tuple[str | None, dict]:
 
 
 # ── vault writeback ────────────────────────────────────────────────────────
-def writeback(path: pathlib.Path, cid: str, first_registered: str):
-    """create 후 google_contact_id·gcontacts_first_registered·gcontacts_sync: yes 갱신(멱등)."""
+def set_frontmatter_field(path: pathlib.Path, key: str, value: str) -> bool:
+    """frontmatter 스칼라 필드 1개 갱신(있으면 교체, 없으면 `---` 닫기 직전에 삽입). 멱등.
+    contacts_photo.py 등 다른 도구도 재사용 — writeback() 의 내부 헬퍼를 승격(2026-09-07)."""
     txt = path.read_text(encoding="utf-8")
     lines = txt.splitlines()
     if not lines or lines[0] != "---":
-        return
+        return False
     end = next((i for i in range(1, len(lines)) if lines[i] == "---"), None)
     if end is None:
-        return
-
-    def set_field(key: str, value: str):
-        for i in range(1, end):
-            if lines[i].startswith(key + ":"):
-                lines[i] = f"{key}: {value}"
-                return
-        lines.insert(end, f"{key}: {value}")
-
-    set_field("google_contact_id", cid)
-    if first_registered:
-        set_field("gcontacts_first_registered", first_registered)
-    set_field("gcontacts_sync", "yes")
+        return False
+    for i in range(1, end):
+        if lines[i].startswith(key + ":"):
+            lines[i] = f"{key}: {value}"
+            path.write_text("\n".join(lines) + ("\n" if not txt.endswith("\n") else ""), encoding="utf-8")
+            return True
+    lines.insert(end, f"{key}: {value}")
     path.write_text("\n".join(lines) + ("\n" if not txt.endswith("\n") else ""), encoding="utf-8")
+    return True
+
+
+def writeback(path: pathlib.Path, cid: str, first_registered: str):
+    """create 후 google_contact_id·gcontacts_first_registered·gcontacts_sync: yes 갱신(멱등)."""
+    set_frontmatter_field(path, "google_contact_id", cid)
+    if first_registered:
+        set_frontmatter_field(path, "gcontacts_first_registered", first_registered)
+    set_frontmatter_field(path, "gcontacts_sync", "yes")
 
 
 # ── main ───────────────────────────────────────────────────────────────────
