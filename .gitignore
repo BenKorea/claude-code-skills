@@ -1,6 +1,9 @@
 # Skill 런타임 상태 — 머신별, 동기 비대상
 */state/
 
+# 하니스 anthropic-skills 플러그인 로컬 캐시 — 머신별 런타임 산출물, 동기 비대상
+synced/
+
 # Python bytecode + venv
 __pycache__/
 *.pyc
