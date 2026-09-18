@@ -43,6 +43,9 @@ helper 는 `python3 ~/.claude/skills/brainify/brainify.py <subcommand>` 로 호�
    - 파싱은 brainify 가 하지 않는다 — extract(parser-drain)+[[refine]] 가 만든 `<원본>_parse/refined.md`
      를 읽는다(`via: refined:<엔진>`). refined.md 가 없으면(파이프라인 미경유 단건) docling 1회 fallback
      (`via: docling`). 즉 **파싱이 끝난 다음부터가 brainify** — 두 파서 비교·보정은 refine 이 이미 끝냄.
+   - **★ 방금 도착한 첨부(2026-09-18)**: refined.md 도 없고 파일이 15분(`BRAINIFY_PARSE_GRACE_SECONDS`) 이내에
+     도착했으면 → `via: pending-drain`, docling fallback 금지. parser-drain 이 아직 못 본 것뿐이라 인라인
+     단일엔진 폴백으로 앞서가면 `parse_confidence:low` 오탐(타이밍 레이스)이 뜬다 — 헤드리스는 이 항목을 통째로 skip(§헤드리스 참조).
    - `via: error` 또는 markdown 이 비정상적으로 짧으면 → commit 시 `--confidence low`.
    - refined.md 가 없고 PDF 가 듀얼 검증이 필요해 보이면 → 먼저 `/refine` 권유(또는 parser-drain 대기).
    - **★ 오디오(m4a·mp3 등 — 폰 음성녹음, 2026-07-13)**: parser-drain 오디오 루프(faster-whisper 로컬 GPU)가
@@ -159,6 +162,7 @@ helper 는 `python3 ~/.claude/skills/brainify/brainify.py <subcommand>` 로 호�
   진행 중 스레드의 노트가 낡는 게 이 결함의 피해이고, 그건 무인 드레인이 고쳐야 할 몫이다.
 - PARA 좌표가 모호 → 묻지 말고 **가장 그럴듯한 좌표로 낙관 배치 + `--confidence` 와 무관하게
   commit**(helper 가 `para_review: pending` 부착). 교정은 주간 감사가.
+- **`via: pending-drain`(2026-09-18 신설) → commit 하지 말고 이 항목 전체를 건너뛴다**(inbox 그대로 둠, 노트 0). 방금 도착한 첨부라 parser-drain 이 아직 못 본 것뿐 — `pending-ocr`/`pending-transcription`과 달리 완료 시점이 짧고 예측 가능(다음 틱 ≤10분)해서, 즉시 `low` 로 stub 커밋 후 renote 로 고치는 대신 순수 대기가 더 낫다(가짜 "파싱오류" 경고 제거). 다음 brain-drain 재발화(2분 뒤) 때 grace 창이 지나 있으면 정상 처리되거나, 그때도 parser-drain 이 못 따라잡았으면(드묾) 기존 `error`/`low` 경로로 자연히 떨어진다.
 - `via: error`/markdown 비정상·refined.md 부재로 듀얼검증 필요 → `--confidence low` 로 commit(유실 0).
 - **★ 파싱할 대상이 없으면 `low` 가 아니라 `--confidence n/a`** (2026-08-05). `low` 는 *파싱을 시도했는데
   결과가 부실*하다는 뜻이고, 그래야 나중에 `refined.md` 가 생겼을 때 renote 가 집어간다. 첨부가

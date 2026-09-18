@@ -30,6 +30,7 @@ import re
 import shutil
 import subprocess
 import sys
+import time
 
 VAULT = pathlib.Path(os.path.expanduser(os.environ.get("BRAINIFY_VAULT", "~/projects/2nd-brain-vault")))
 # 처리 대상 인박스. env 로 갈아끼울 수 있다 — `_hold` 대기실을 처리할 때 쓴다(2026-08-07).
@@ -179,6 +180,11 @@ def _refined(host_path: pathlib.Path) -> dict | None:
     return {"via": base, "markdown": body}
 
 
+# parser-drain 틱(~10분 간격)보다 여유 있게 — 방금 도착한 첨부에 인라인 docling 폴백을 쓰지
+# 않고 다음 틱까지 기다린다(타이밍 레이스 제거, 2026-09-18). pending-ocr/pending-transcription
+# 과 달리 parser-drain 의 완료 시점은 짧고 예측 가능해서(다음 틱) 즉시 stub 커밋 대신 순수 대기가 안전하다.
+PARSE_GRACE_SECONDS = int(os.environ.get("BRAINIFY_PARSE_GRACE_SECONDS", "900"))
+
 # ── 파싱 제외 정책 (backfill 과 동일 — 권위: backfill SKILL.md/backfill.py) ──
 BULK_PAGES = 100             # 방대 reference PDF auto-parse 제외 임계(페이지)
 BULK_MB = 20                 # 방대 제외 임계(MB)
@@ -263,6 +269,15 @@ def _parse(host_path: pathlib.Path) -> dict:
         if pre is not None:
             return pre
         return {"via": "error", "markdown": "", "error": "hwp_refine 실행됐으나 refined.md 없음"}
+    # 방금 도착한 파일 — parser-drain 이 아직 못 봤을 뿐인데 인라인 docling(단일엔진·무검증)으로
+    # 미리 처리하면 parse_confidence:low 오탐(=타이밍 레이스)이 뜬다. 다음 틱까지 대기.
+    try:
+        age = time.time() - host_path.stat().st_mtime
+    except OSError:
+        age = PARSE_GRACE_SECONDS  # mtime 을 못 구하면 안전하게 기존 동작(즉시 폴백) 유지
+    if age < PARSE_GRACE_SECONDS:
+        return {"via": "pending-drain", "markdown": "",
+                "reason": f"도착 {age / 60:.0f}분 전 — parser-drain 다음 틱 대기(레이스 방지)"}
     cmd = [
         "docker", "run", "--rm", "-u", f"{os.getuid()}:{os.getgid()}",
         "-v", f"{VAULT}:/home/user/projects/2nd-brain-vault",
