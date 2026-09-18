@@ -232,6 +232,15 @@ def _is_bulk(f: pathlib.Path):
     return False, ""
 
 
+def _fresh(host_path: pathlib.Path) -> bool:
+    """방금 도착해 parser-drain 다음 틱을 기다려야 하는 파일인지(grace 창 이내).
+    mtime 을 못 구하면 안전하게 False(기존 즉시 처리 동작 유지)."""
+    try:
+        return (time.time() - host_path.stat().st_mtime) < PARSE_GRACE_SECONDS
+    except OSError:
+        return False
+
+
 def _parse(host_path: pathlib.Path) -> dict:
     """파일 1개 → {via, markdown}. refined.md(refine 산출) 우선, 없으면 docling fallback.
     제외(백필 정책): xlsx 데이터=경량 stdlib 추출(docling X), 방대 reference PDF=on-demand page-Read."""
@@ -252,7 +261,10 @@ def _parse(host_path: pathlib.Path) -> dict:
                 return {"via": "error", "markdown": "", "error": f"ocr.json 파싱 실패: {str(e)[-200:]}"}
         return {"via": "pending-ocr", "markdown": "",
                 "reason": "이미지 OCR 대기 — parser-drain 이미지 루프(MinerU)가 ocr.json 생산"}
-    if host_path.suffix.lower() in (".xlsx", ".xls"):                 # 데이터 스프레드시트 — docling 불요
+    if host_path.suffix.lower() in (".xlsx", ".xls"):                 # 데이터 스프레드시트 — docling 불요, parser-drain 이 정식 파싱(refined.md)
+        if _fresh(host_path):
+            return {"via": "pending-drain", "markdown": "",
+                    "reason": "도착 직후 — parser-drain 다음 틱 대기(xlsx/xls 정식 파싱, 레이스 방지)"}
         return {"via": "skipped-xlsx", "markdown": "", "reason": "데이터 스프레드시트(zipfile→sharedStrings 경량 추출로 파악)"}
     bulk, reason = _is_bulk(host_path)                                # 방대 reference — auto-parse 제외
     if bulk:
@@ -271,13 +283,9 @@ def _parse(host_path: pathlib.Path) -> dict:
         return {"via": "error", "markdown": "", "error": "hwp_refine 실행됐으나 refined.md 없음"}
     # 방금 도착한 파일 — parser-drain 이 아직 못 봤을 뿐인데 인라인 docling(단일엔진·무검증)으로
     # 미리 처리하면 parse_confidence:low 오탐(=타이밍 레이스)이 뜬다. 다음 틱까지 대기.
-    try:
-        age = time.time() - host_path.stat().st_mtime
-    except OSError:
-        age = PARSE_GRACE_SECONDS  # mtime 을 못 구하면 안전하게 기존 동작(즉시 폴백) 유지
-    if age < PARSE_GRACE_SECONDS:
+    if _fresh(host_path):
         return {"via": "pending-drain", "markdown": "",
-                "reason": f"도착 {age / 60:.0f}분 전 — parser-drain 다음 틱 대기(레이스 방지)"}
+                "reason": "도착 직후 — parser-drain 다음 틱 대기(레이스 방지)"}
     cmd = [
         "docker", "run", "--rm", "-u", f"{os.getuid()}:{os.getgid()}",
         "-v", f"{VAULT}:/home/user/projects/2nd-brain-vault",
