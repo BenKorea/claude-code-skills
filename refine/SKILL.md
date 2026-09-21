@@ -75,6 +75,19 @@ helper 는 `python3 ~/.claude/skills/refine/refine.py <subcommand>` (출력 JSON
 
 근거: [자동 우선·주간 감사 정책](../../../../projects/2nd-brain-vault/knowledge/02_areas/brain-system/automation-review-policy.md).
 
+## confidence 강제 게이트 (2026-09-21 신설)
+
+`refine.py` 가 LLM 이 넘긴 `--confidence` 를 무조건 신뢰하지 않는다 — `<!-- image -->` 같은
+플레이스홀더를 제거한 **실제 본문 길이 < 20자**면 `ok` 로 넘겨도 자동으로 `low` 로 강제 하향된다
+(`_effective_confidence()`). 카드뉴스형 PDF(텍스트 없이 이미지/벡터뿐, `<!-- image -->` 태그가
+여러 번 반복)에서 비전검증이 사실상 실패했는데도 LLM 이 `ok` 로 오판해 기록되는 사고를 막기 위함
+— 2026-09-21 KSRP 뉴스레터 건(태그 9회 반복, `refine_confidence: ok` 오기록)으로 실측. 단순
+`len(md.strip())` 만 보면 플레이스홀더 반복만으로 임계치를 넘어버려 못 잡는다.
+
+→ 그래서 `write` 호출 시 `--confidence ok` 를 넘기더라도 본문이 비어 있으면 결과 `refined.md`
+   에는 `refine_confidence: low` 로 찍힌다 — 이건 버그가 아니라 게이트가 작동한 것. 주간 감사가
+   그 플래그를 본다.
+
 ## 모드 — 비전검증 불가/실패
 
 - 원본 PDF 가 스캔 이미지라 두 파서 모두 빈 추출이면 → `Read` 로 페이지를 직접 비전 판독해 핵심만

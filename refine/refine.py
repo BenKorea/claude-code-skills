@@ -25,11 +25,36 @@ import datetime
 import json
 import os
 import pathlib
+import re
 import socket
 import sys
 
 VAULT = pathlib.Path(os.path.expanduser(os.environ.get("REFINE_VAULT", "~/projects/2nd-brain-vault")))
 INBOX = VAULT / "sources" / "00_inbox"
+
+_PLACEHOLDER_RE = re.compile(r"<!--\s*image\s*-->", re.IGNORECASE)
+_MIN_CONTENT_CHARS = 20  # promote 의 기존 임계치를 계승 — 플레이스홀더 제거 후 기준으로 통일
+
+
+def _content_chars(md: str) -> int:
+    """`<!-- image -->` 같은 플레이스홀더를 제거한 실제 본문 길이.
+
+    태그가 여러 번(카드뉴스형 PDF 등) 반복되면 단순 len(md.strip()) 은 임계치를
+    쉽게 넘어버려 '이미지 태그만 있고 실텍스트는 0' 인 stub 을 못 잡는다 — 2026-09-21
+    KSRP 뉴스레터 건(9개 반복, refine_confidence:ok 오판)으로 실측.
+    """
+    return len(_PLACEHOLDER_RE.sub("", md).strip())
+
+
+def _effective_confidence(md: str, requested: str, force_low: bool = False) -> str:
+    """호출자(LLM 포함)가 넘긴 confidence 를 무조건 신뢰하지 않는다.
+
+    diverge 경로(cmd_write)는 비전검증이 실패해도 LLM 이 'ok' 라고 우기면 그대로
+    기록됐다 — 이 게이트가 본문 실질 길이로 그 주장을 재검증해 강제로 low 로 낮춘다.
+    """
+    if force_low or _content_chars(md) < _MIN_CONTENT_CHARS:
+        return "low"
+    return requested
 
 
 def _load(p: pathlib.Path) -> dict | None:
@@ -170,7 +195,7 @@ def cmd_promote(args) -> int:
         print(json.dumps({"ok": True, "skipped": "refined.md 이미 있음", "refined": str(pd / "refined.md")},
                          ensure_ascii=False)); return 0
     md = primary.get("markdown", "")
-    conf = "low" if (primary.get("via") == "error" or len(md.strip()) < 20) else "ok"
+    conf = _effective_confidence(md, "ok", force_low=(primary.get("via") == "error"))
     res = _write_refined(pd, primary.get("via", engine_file.removesuffix(".json")), [], md, conf)
     print(json.dumps(res, ensure_ascii=False)); return 0
 
@@ -183,7 +208,8 @@ def cmd_write(args) -> int:
     body = pathlib.Path(args.body_file).read_text(encoding="utf-8") if args.body_file else ""
     if not body.strip():
         print(json.dumps({"error": "본문(--body-file)이 비어 있음"}, ensure_ascii=False)); return 1
-    res = _write_refined(pd, args.base_engine, list(args.correction or []), body, args.confidence)
+    conf = _effective_confidence(body, args.confidence)
+    res = _write_refined(pd, args.base_engine, list(args.correction or []), body, conf)
     print(json.dumps(res, ensure_ascii=False)); return 0
 
 
