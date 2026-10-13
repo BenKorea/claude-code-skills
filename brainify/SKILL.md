@@ -47,6 +47,7 @@ helper 는 `python3 ~/.claude/skills/brainify/brainify.py <subcommand>` 로 호�
      도착했으면 → `via: pending-drain`, docling fallback 금지. parser-drain 이 아직 못 본 것뿐이라 인라인
      단일엔진 폴백으로 앞서가면 `parse_confidence:low` 오탐(타이밍 레이스)이 뜬다 — 헤드리스는 이 항목을 통째로 skip(§헤드리스 참조).
    - `via: error` 또는 markdown 이 비정상적으로 짧으면 → commit 시 `--confidence low`.
+   - **★ HTML 메일 본문은 "이미지라 특정 불가"로 결론 내지 않는다 (2026-10-01)**: 쿠팡 등 주문·영수증 메일은 상품명·수량·판매자가 HTML `<td>`/`<span>` 텍스트로 들어 있는데(80KB), 가격만 건지고 상품명을 놓쳐 "이미지 기반 — 특정 불가"+`low` 로 stub 이 난 실사례(`2026-09-28_쿠팡_방배입주_주문내역`). **가격은 읽히는데 상품명이 비면 판독 실패 신호** — `_thread.md` 에서 태그를 걷어낸 텍스트·정규식으로 행 단위 재추출하고, 가격×수량 합계 = 메일 상품합계/결제금액 대조로 검증한 뒤 노트화. 대조까지 통과해야 `ok`; 진짜 이미지(`<img>` 만 있고 텍스트 0)일 때만 "특정 불가"+`low`.
    - refined.md 가 없고 PDF 가 듀얼 검증이 필요해 보이면 → 먼저 `/refine` 권유(또는 parser-drain 대기).
    - **★ 오디오(m4a·mp3 등 — 폰 음성녹음, 2026-07-13)**: parser-drain 오디오 루프(faster-whisper 로컬 GPU)가
      `<원본>_parse/refined.md`(타임스탬프 전사)를 생산 — brainify 는 그걸 소비만 한다(`via: refined:faster-whisper-*`).
