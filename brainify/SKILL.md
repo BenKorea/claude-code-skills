@@ -175,6 +175,9 @@ helper 는 `python3 ~/.claude/skills/brainify/brainify.py <subcommand>` 로 호�
 - **회의록·문서 시리즈(확정 vs 중간본, §3-★)**: 확정 여부가 헤드리스로 불확실하면 **보수적으로 `--doc-status interim`**
   (source-trail, 요약 생략) + `para_review: pending` → 주간 감사가 정본 승급. 무인이 초안을 정본으로 적재해 knowledge
   오염시키는 것 방지(clutter < 유실, raw 는 보존됨). 명백한 확정본(회의 후 "회의록" 회람·"확정")만 final 요약.
+- **★ 대용량 첨부는 전문을 읽지 말고 먼저 판정한다 (2026-10-16)**: `refined.md` 가 크면(≈100KB+) `inspect`/Read 로 통째로 읽지 말 것 — 헤드리스는 턴 예산(`--max-budget-usd`)이 있어, 전문을 읽다 상한에 닿으면 노트 0·`rc=1` 로 **같은 항목이 재시도-번**(대기열 맨 앞이 막혀 뒤 항목도 전부 정체)된다.
+  순서: ① `_thread.md`(본문·제목) + `refined.md` 의 `head -40`·`grep -n '^#'` 만으로 **문서 종류 판정** → ② 같은 시리즈 정본 `grep -ril "<키>" knowledge/` 로 **이미 확정본이 있으면 중간본**(`--doc-status interim --superseded-by <정본>`, 요약 생략 — 전문 불필요) → ③ 정본이 없고 진짜 새 문서일 때만 필요한 장(章)을 `sed -n` 으로 부분 읽기.
+  - 실측: 2026-10-16 RAS6093 PPRM 회의보고서 draft v3(docx→refined.md 202KB) — 확정본이 이미 vault 에 있는 중간본인데 전문을 읽다 $2.5 상한 초과 2회(14:14·14:21 KST), 인박스 10건 정체. 헤더·`_thread.md` 만으로 판정해 수동 처리하니 즉시 끝났다.
 - **인맥 반영 (자동 트랙·무인) — 교류갱신만, 신규 생성 ✗** — `matched` → 본문 `[[링크]]` + `link-event`(멱등) + per-field 추론 갱신
   (provenance 충돌 시 *묻지 말고* `gcontacts_review: flagged (필드 충돌:…)`) + 확정노트면 `contacts_sync --apply`.
   `unmatched`/`no_contact`/`held` → **로그(보고)만** — 자동은 신규 인맥을 만들지 않는다(2026-06-24, 생성은 수동 트랙 전용). `new-person` 자동 호출 ✗.
