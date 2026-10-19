@@ -38,6 +38,14 @@ helper 는 `python3 ~/.claude/skills/refine/refine.py <subcommand>` (출력 JSON
 `refine.py promote "<parse_dir>"`. docling markdown 을 그대로 `refined.md` 로 승격(두 파서가
 임계 내 일치하거나, 비-PDF 라 비교 대상이 없음). 비전검증 생략 — 빠르고 비용 0.
 
+**a′) `diverge` 인데 `hangul_gate` 가 찍혀 있음 → 결정형 승격 (LLM 0, 2026-10-16 신설).**
+`scan` 이 `action: promote` + `hangul_gate: {docling: n, mineru: m}` 로 내려준다. 스캔 한글 문서에서 docling 이
+OCR 언어 불일치(RapidOCR 기본 chinese)로 한자 쓰레기를 내고 mineru(`-l korean`)만 한글을 복원한 경우 —
+기준 *mineru 한글 ≥ 50자 이고 docling 한글 × 5 < mineru 한글*(`REFINE_HANGUL_GATE_MIN/RATIO`). `promote` 가
+알아서 **mineru 를 채택**하고 corrections 에 사유를 남긴다. 길이 게이트는 이걸 못 본다(쓰레기도 길이는
+충분하다). 실측: FutureChem 2015 계약서 13p — docling 64자 vs mineru 13,609자. `--force` 로 소급 재정제 가능.
+반대로 `write` 에서 LLM 이 docling 을 채택했는데 게이트가 mineru 를 가리키면 helper 가 `low` 로 강등한다.
+
 **b) `diverge` → 비전검증 후 보정 (이 스킬의 핵심 판단).**
 
 1. `refine.py read "<parse_dir>"` — `verdict`·`metrics`·`details`(`headings_only_in_a`=docling /

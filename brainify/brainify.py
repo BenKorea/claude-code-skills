@@ -57,7 +57,7 @@ HWP_REFINE = pathlib.Path(os.path.expanduser(os.environ.get(
 AUDIO = {".m4a", ".mp3", ".wav", ".ogg", ".opus", ".aac", ".amr"}   # 폰 음성녹음 등 — parser-drain 오디오 루프(faster-whisper)가 refined.md 생산
 IMAGE = {".jpg", ".jpeg", ".png", ".webp", ".jfif", ".heic", ".bmp", ".tif", ".tiff", ".gif"}  # 폰 사진·스캔·명판 등 — parser-drain 이미지 루프(MinerU OCR)가 <원본>_parse/ocr.json 생산 (2026-07-20: 사진 무인 편입 활성)
 PARSEABLE = {".pdf", ".docx", ".pptx", ".xlsx", ".hwp", ".hwpx", ".doc", ".ppt", ".xls",
-             ".odt", ".odp", ".ods", ".rtf"} | AUDIO | IMAGE
+             ".odt", ".odp", ".ods", ".rtf", ".zip"} | AUDIO | IMAGE   # .zip: parser-drain zip 루프가 풀어 집계(2026-10-16)
 
 
 def _front(md_path: pathlib.Path) -> dict:
@@ -241,12 +241,60 @@ def _fresh(host_path: pathlib.Path) -> bool:
         return False
 
 
+# ── parser-drain 진행중 감지 (2026-10-19 신설) ──────────────────────────────────
+# `_fresh()` 의 grace 는 **도착 시각**만 본다. 그래서 파싱이 15분보다 오래 걸리면(실측: 114KB xlsx 가
+# docling 9분) 창이 먼저 닫히고, brainify 가 **파싱 중인 파일을** skipped-xlsx/docling 폴백으로 커밋해
+# 폴더째 옮겨 버린다 → parser-drain 은 끝난 뒤 출력 경로를 못 찾아 "빈 출력" 실패 마커를 남기고,
+# 9분 산출물은 버려져 재파싱된다(2026-10-01 EM preliminary 건). 시계가 아니라 **상태**를 본다:
+#   진행 중 = parser-drain 잠금이 잡혀 있음 AND (엔진 출력 임시파일 `*.tmp` 가 있거나,
+#            `_parse/` 가 있는데 종결 산출물(refined/docling/ocr/.parse-error/.parse-skipped)이 하나도 없음)
+# 잠금이 풀려 있으면 tmp·빈 `_parse/` 는 죽은 런의 잔재 → 진행 중 아님(영구 대기 방지).
+PARSER_DRAIN_LOCK = pathlib.Path(os.environ.get("PARSER_DRAIN_LOCK", f"/run/user/{os.getuid()}/parser-drain.lock"))
+_TERMINAL = ("refined.md", "docling.json", "ocr.json", ".parse-error", ".parse-skipped")
+
+
+def _parser_drain_running() -> bool:
+    """parser-drain.sh 의 flock 을 비차단으로 잡아 본다 — 잡히면 안 도는 것, 못 잡으면 도는 중."""
+    import fcntl
+    try:
+        fd = os.open(str(PARSER_DRAIN_LOCK), os.O_RDWR | os.O_CREAT, 0o644)
+    except OSError:
+        return False
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        return False
+    except OSError:
+        return True
+    finally:
+        os.close(fd)
+
+
+def _parsing_now(host_path: pathlib.Path) -> bool:
+    pd = host_path.parent / (host_path.name + "_parse")
+    if not pd.is_dir():
+        return False
+    if not any(pd.glob("*.tmp")) and any((pd / t).exists() for t in _TERMINAL):
+        return False
+    return _parser_drain_running()
+
+
+def _item_parsing(item: pathlib.Path) -> bool:
+    """항목(스레드 폴더 또는 낱개 파일)에 지금 parser-drain 이 파싱 중인 파일이 하나라도 있는가."""
+    if item.is_dir():
+        return any(_parsing_now(a) for a in item.iterdir() if a.is_file() and a.suffix.lower() in PARSEABLE)
+    return item.is_file() and _parsing_now(item)
+
+
 def _parse(host_path: pathlib.Path) -> dict:
     """파일 1개 → {via, markdown}. refined.md(refine 산출) 우선, 없으면 docling fallback.
     제외(백필 정책): xlsx 데이터=경량 stdlib 추출(docling X), 방대 reference PDF=on-demand page-Read."""
     pre = _refined(host_path)
     if pre is not None:
         return pre
+    if _parsing_now(host_path):                                       # parser-drain 이 지금 이 파일을 파싱 중 — grace 와 무관하게 대기
+        return {"via": "pending-drain", "markdown": "",
+                "reason": "parser-drain 파싱 진행 중(_parse/*.tmp + 잠금) — 완료 후 다음 틱에 처리"}
     if host_path.suffix.lower() in AUDIO:                             # 오디오 — docling N/A, 전사는 parser-drain(whisper)
         return {"via": "pending-transcription", "markdown": "",
                 "reason": "오디오 전사 대기 — parser-drain 오디오 루프(whisper venv 머신)가 refined.md 생산"}
@@ -261,6 +309,12 @@ def _parse(host_path: pathlib.Path) -> dict:
                 return {"via": "error", "markdown": "", "error": f"ocr.json 파싱 실패: {str(e)[-200:]}"}
         return {"via": "pending-ocr", "markdown": "",
                 "reason": "이미지 OCR 대기 — parser-drain 이미지 루프(MinerU)가 ocr.json 생산"}
+    if host_path.suffix.lower() == ".zip":                            # 압축 첨부 — parser-drain zip 루프(zip_refine.py)가 풀어 <zip>_parse/refined.md 집계 (2026-10-16)
+        perr = host_path.parent / (host_path.name + "_parse") / ".parse-error"
+        if perr.exists():
+            return {"via": "error", "markdown": "", "error": f"zip 추출·파싱 실패(.parse-error): {perr.read_text(encoding='utf-8', errors='replace')[-200:]}"}
+        return {"via": "pending-drain", "markdown": "",
+                "reason": "zip — parser-drain zip 루프 대기(구성원 추출·파싱 후 refined.md 집계). docling 직접 불가"}
     if host_path.suffix.lower() in (".xlsx", ".xls"):                 # 데이터 스프레드시트 — docling 불요, parser-drain 이 정식 파싱(refined.md)
         if _fresh(host_path):
             return {"via": "pending-drain", "markdown": "",
@@ -323,11 +377,13 @@ def _items() -> list[dict]:
                 fm = _front(p / "_thread.md")
                 out.append({"item": p.name, "kind": "thread",
                             "identifier": fm.get("gmail_thread_id", ""),
-                            "message_count": _msg_count(p / "_thread.md")})
+                            "message_count": _msg_count(p / "_thread.md"),
+                            "parsing": _item_parsing(p)})   # parser-drain 진행 중 — brain-drain 은 이 항목을 이번 틱에 집지 않는다
         elif p.is_file() and p.suffix.lower() in PARSEABLE:
             out.append({"item": p.name, "kind": "file",
                         "identifier": "sha:" + _sha256(p),
-                        "message_count": 0})
+                        "message_count": 0,
+                        "parsing": _item_parsing(p)})
     return out
 
 
@@ -393,6 +449,16 @@ def cmd_commit(args) -> int:
     item = INBOX / args.item
     if not item.exists():
         print(json.dumps({"error": f"없음: {item}"}, ensure_ascii=False)); return 1
+    # ★ 헤드리스 1항목 강제 (2026-10-19): brain-drain 이 담당 항목을 BRAINIFY_HEADLESS_ITEM 으로 넘긴다.
+    #   SKILL 의 "턴당 1항목" 은 모델 규칙이라 지켜지지 않았다 — 2026-10-01 한 세션이 scan 으로 본 4건을
+    #   전부 커밋했고, 그중 하나가 parser-drain 이 파싱 중이던 파일이었다. 다른 항목은 여기서 기계적으로 거부.
+    only = os.environ.get("BRAINIFY_HEADLESS_ITEM", "")
+    if only and args.item != only:
+        print(json.dumps({"error": f"헤드리스 담당 항목 아님 — 거부: {args.item} (담당: {only})"}, ensure_ascii=False)); return 1
+    # ★ 파싱 진행 중이면 옮기지 않는다 (2026-10-19): 폴더째 옮기면 parser-drain 의 출력 경로가 사라져
+    #   실패 마커·유령 폴더가 남고 산출물은 버려진다. 다음 틱에 refined.md 와 함께 처리된다.
+    if _item_parsing(item):
+        print(json.dumps({"error": f"parser-drain 파싱 진행 중 — commit 거부(다음 틱 대기): {args.item}"}, ensure_ascii=False)); return 1
 
     # ── 갱신 경로: 같은 thread_id 의 노트가 이미 있고 메시지가 늘었으면 *그 노트를 제자리 갱신*.
     # 새 노트/새 sources 폴더를 만들면 "한 사안 = 한 정본" 이 깨지고 중복이 쌓인다.
@@ -621,9 +687,25 @@ def _refined_targets(fm: dict) -> list[dict]:
         pds = sorted(p for p in src.glob("*_parse") if p.is_dir())
     elif src.is_file():
         pds = [src.parent / (src.name + "_parse")]
-    return [{"parse_dir": str(pd.relative_to(VAULT)),
-             "refined": str((pd / "refined.md").relative_to(VAULT)),
-             "ready": (pd / "refined.md").is_file()} for pd in pds]
+    out = []
+    for pd in pds:
+        ready = (pd / "refined.md").is_file()
+        perr = pd / ".parse-error"
+        # ★ 실패 확정 (2026-10-17): refined 가 없고 .parse-error 가 있으면 "아직 대기"가 아니라 "추출 실패".
+        #   둘을 구별하지 않던 때, 첨부 3개 중 hwp 1개만 실패한 노트가 ready:false 로 영구 대기했다
+        #   (RAS6097 과기부 결과보고서 — 첨부 0건·zip 에 이은 세 번째 '영원히 안 풀리는 플래그').
+        failed = (not ready) and perr.is_file()
+        reason = ""
+        if failed:
+            try:
+                m = re.search(r"^reason:\s*(.+)$", perr.read_text(encoding="utf-8", errors="replace"), re.M)
+                reason = (m.group(1).strip() if m else "(사유 미기록 — 빈 마커)")[:200]
+            except OSError:
+                reason = "(마커 읽기 실패)"
+        out.append({"parse_dir": str(pd.relative_to(VAULT)),
+                    "refined": str((pd / "refined.md").relative_to(VAULT)),
+                    "ready": ready, "failed": failed, **({"fail_reason": reason} if failed else {})})
+    return out
 
 
 def cmd_renote_scan(_args) -> int:
@@ -636,13 +718,33 @@ def cmd_renote_scan(_args) -> int:
         if str(fm.get("source_missing", "")).lower() == "true":
             continue                      # 원본 부재 — refined 가 생길 리 없다
         tg = _refined_targets(fm)
+        # 붙어 있는 _parse 가 하나라도 있고, 전부가 refined 또는 실패 확정이며, refined 가 하나는 있으면
+        # 재작성 재료가 갖춰진 것. 실패 확정 첨부는 renote-read 가 `failed` 로 넘겨 노트에 명시하게 한다.
+        ready = bool(tg) and any(t["ready"] for t in tg) and all(t["ready"] or t["failed"] for t in tg)
+        # ★ 재검토 루프 가드 (2026-10-16): `renoted:` 가 찍힌 노트는 그 뒤에 refined.md 가 **새로
+        #   생기거나 바뀐** 경우에만 다시 집는다. 마커는 "같은 노트를 매 틱 다시 태우지 않게 하는
+        #   흔적"이라고 적어 놓고 아무도 읽지 않았다 — refined.md 가 쓰레기(스캔 한글 PDF 의 docling
+        #   한자 OCR)라 LLM 이 low 를 유지하면 다음 틱이 또 집어, FutureChem 계약서 건에서 한 노트에
+        #   11회·토큰 ≈$4 를 태웠다. 비교 기준은 날짜가 아니라 mtime: renote-write 가 노트를 다시 쓰므로
+        #   노트 mtime > refined mtime 이면 이미 그 refined 를 본 것이다.
+        examined = False
+        if ready and fm.get("renoted"):
+            try:
+                newest = max((VAULT / t["refined"]).stat().st_mtime for t in tg)
+                if newest <= md.stat().st_mtime:
+                    ready, examined = False, True
+            except OSError:
+                pass
         items.append({
             "note": str(md.relative_to(VAULT)),
             "title": fm.get("title", ""),
             "sources": fm.get("sources", ""),
             "targets": tg,
-            # 붙어 있는 _parse 가 하나라도 있고 그 전부가 refined 면 재작성 재료가 갖춰진 것.
-            "ready": bool(tg) and all(t["ready"] for t in tg),
+            "ready": ready,
+            # 이미 현재 refined.md 로 재검토를 마친 노트(low 존치 결정). refined 가 갱신되면 다시 ready.
+            "examined": examined,
+            # 추출 실패로 확정된 첨부 수 — 0 이 아니면 renote 가 노트에 "첨부 N 중 K 추출 실패" 를 적는다.
+            "failed": sum(1 for t in tg if t["failed"]),
             # ★ 붙은 _parse 가 0 = **영원히 ready 가 될 수 없다**(파싱할 파일 자체가 없음).
             #   'refine 대기'와 겉모습이 같아 조용히 영구 잔류한다 — 2026-08-05 실측에서
             #   첨부 0 스레드 3건이 매 보고마다 '파싱오류'로 떴다. 그 오분류는 low 가 아니라
@@ -651,8 +753,9 @@ def cmd_renote_scan(_args) -> int:
         })
     ready = [i for i in items if i["ready"]]
     stuck = [i for i in items if i["no_source"]]
+    examined = [i for i in items if i["examined"]]
     print(json.dumps({"count": len(items), "pending": len(ready),
-                      "no_source": len(stuck), "items": items},
+                      "no_source": len(stuck), "examined": len(examined), "items": items},
                      ensure_ascii=False, indent=2))
     return 0
 
@@ -669,7 +772,10 @@ def cmd_renote_read(args) -> int:
     thread = src / "_thread.md"
     if thread.is_file():
         parts.append({"name": "_thread.md", "markdown": thread.read_text(encoding="utf-8")})
+    failed = []
     for t in _refined_targets(fm):
+        if t["failed"]:
+            failed.append({"parse_dir": t["parse_dir"], "reason": t.get("fail_reason", "")})
         if not t["ready"]:
             continue
         text = (VAULT / t["refined"]).read_text(encoding="utf-8")
@@ -677,8 +783,10 @@ def cmd_renote_read(args) -> int:
         parts.append({"name": t["refined"], "truncated": truncated,
                       "markdown": text[:MAX_REFINED_CHARS],
                       **({"omitted_chars": len(text) - MAX_REFINED_CHARS} if truncated else {})})
+    # failed: 추출 실패로 확정된 첨부 — 재작성 본문에 "첨부 N 중 K 추출 실패(사유)" 를 명시하고
+    # parse_confidence 는 low 로 둔다(원본은 남아 있으니 수동 열람 가능, 주간 감사 대상).
     print(json.dumps({"note": str(note.relative_to(VAULT)), "frontmatter": fm_lines,
-                      "existing_body": body, "parts": parts}, ensure_ascii=False))
+                      "existing_body": body, "parts": parts, "failed": failed}, ensure_ascii=False))
     return 0
 
 

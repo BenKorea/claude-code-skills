@@ -57,6 +57,43 @@ def _effective_confidence(md: str, requested: str, force_low: bool = False) -> s
     return requested
 
 
+_HANGUL_RE = re.compile(r"[가-힣]")
+# 한글 비율 게이트(2026-10-16). mineru 한글이 이만큼은 있어야 발동하고, docling 한글 × 비율 < mineru 한글이면 발동.
+HANGUL_GATE_MIN = int(os.environ.get("REFINE_HANGUL_GATE_MIN", "50"))
+HANGUL_GATE_RATIO = int(os.environ.get("REFINE_HANGUL_GATE_RATIO", "5"))
+
+
+def _hangul(md: str) -> int:
+    return len(_HANGUL_RE.findall(md or ""))
+
+
+def _hangul_gate(pd: pathlib.Path) -> dict | None:
+    """스캔 한글 문서에서 docling 이 OCR 언어 불일치(RapidOCR 기본 chinese)로 한자 쓰레기를 내고
+    mineru(`-l korean`)만 한글을 복원한 경우를 **결정형**으로 잡는다. 길이 게이트는 이걸 못 본다 —
+    쓰레기도 길이는 충분하다.
+
+    반환: {"docling": n, "mineru": m, "md": mineru markdown} 또는 None(게이트 미발동).
+    2026-10-16 실측: FutureChem 2015 계약서 스캔본(복합기 PDF) — docling 한글 64자 vs mineru 13,609자,
+    verdict=diverge 인데 brain-drain 의 Gemini 지름길이 promote 로 docling 을 채택해 refined.md 가
+    쓰레기가 됐고, renote 가 그 쓰레기를 매 틱 다시 읽었다. 같은 모양이 vault 에 49건(자동차등록증·
+    의사면허증명서·등기부등본·전국포럼 발표자료집 17,870자 vs 0자…).
+    """
+    docling = _load(pd / "docling.json")
+    mineru = _load(pd / "mineru.json")
+    if not docling or not mineru:
+        return None
+    dk = _hangul(docling.get("markdown", ""))
+    mk = _hangul(mineru.get("markdown", ""))
+    if mk >= HANGUL_GATE_MIN and dk * HANGUL_GATE_RATIO < mk:
+        return {"docling": dk, "mineru": mk, "md": mineru.get("markdown", "")}
+    return None
+
+
+def _gate_note(g: dict) -> str:
+    return (f"한글 비율 게이트: docling 한글 {g['docling']}자 vs mineru {g['mineru']}자 — "
+            f"스캔 한글 문서 OCR 언어 불일치, mineru 채택")
+
+
 def _load(p: pathlib.Path) -> dict | None:
     try:
         return json.loads(p.read_text(encoding="utf-8"))
@@ -119,6 +156,9 @@ def cmd_scan(args) -> int:
             continue
         done = (pd / "refined.md").exists()
         verdict, _ = _verdict(pd)
+        # diverge 라도 한글 비율 게이트가 발동하면 LLM 없이 결정형 promote(mineru 채택)로 내린다.
+        gate = _hangul_gate(pd) if (verdict == "diverge" and not done) else None
+        needs_llm = (verdict == "diverge") and not done and gate is None
         items.append({
             "parse_dir": str(pd.relative_to(VAULT)),
             "source": str(_source_of(pd).relative_to(VAULT)),
@@ -126,8 +166,9 @@ def cmd_scan(args) -> int:
             "primary": engine_file,
             "has_mineru": (pd / "mineru.json").exists(),
             "refined": done,
-            "needs_llm": (verdict == "diverge") and not done,
-            "action": "skip(done)" if done else ("refine" if verdict == "diverge" else "promote"),
+            "needs_llm": needs_llm,
+            "hangul_gate": ({"docling": gate["docling"], "mineru": gate["mineru"]} if gate else None),
+            "action": "skip(done)" if done else ("refine" if needs_llm else "promote"),
         })
     pending = [i for i in items if not i.get("refined") and i.get("status") != "no-extract"]
     print(json.dumps({"root": str(root), "count": len(items),
@@ -194,6 +235,12 @@ def cmd_promote(args) -> int:
     if (pd / "refined.md").exists() and not args.force:
         print(json.dumps({"ok": True, "skipped": "refined.md 이미 있음", "refined": str(pd / "refined.md")},
                          ensure_ascii=False)); return 0
+    gate = _hangul_gate(pd)
+    if gate:
+        # docling 이 한자 쓰레기, mineru 가 한글 — 결정형으로 mineru 채택(verdict 불문, --force 소급 포함).
+        conf = _effective_confidence(gate["md"], "ok")
+        res = _write_refined(pd, "mineru", [_gate_note(gate)], gate["md"], conf)
+        print(json.dumps(res, ensure_ascii=False)); return 0
     md = primary.get("markdown", "")
     conf = _effective_confidence(md, "ok", force_low=(primary.get("via") == "error"))
     res = _write_refined(pd, primary.get("via", engine_file.removesuffix(".json")), [], md, conf)
@@ -209,7 +256,14 @@ def cmd_write(args) -> int:
     if not body.strip():
         print(json.dumps({"error": "본문(--body-file)이 비어 있음"}, ensure_ascii=False)); return 1
     conf = _effective_confidence(body, args.confidence)
-    res = _write_refined(pd, args.base_engine, list(args.correction or []), body, conf)
+    corrections = list(args.correction or [])
+    # LLM 이 docling 을 채택했는데 한글 비율 게이트가 mineru 쪽을 가리키면 그 주장을 믿지 않는다 —
+    # 본문이 한자 쓰레기일 가능성이 크므로 low 로 낮추고 사유를 남긴다(주간 감사가 본다).
+    gate = _hangul_gate(pd)
+    if gate and args.base_engine == "docling":
+        conf = "low"
+        corrections.append(_gate_note(gate) + " 권고 — LLM 은 docling 채택, low 로 강등")
+    res = _write_refined(pd, args.base_engine, corrections, body, conf)
     print(json.dumps(res, ensure_ascii=False)); return 0
 
 

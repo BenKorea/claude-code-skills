@@ -163,6 +163,7 @@ helper 는 `python3 ~/.claude/skills/brainify/brainify.py <subcommand>` 로 호�
   진행 중 스레드의 노트가 낡는 게 이 결함의 피해이고, 그건 무인 드레인이 고쳐야 할 몫이다.
 - PARA 좌표가 모호 → 묻지 말고 **가장 그럴듯한 좌표로 낙관 배치 + `--confidence` 와 무관하게
   commit**(helper 가 `para_review: pending` 부착). 교정은 주간 감사가.
+- **★ 인자로 받은 1건만 — 기계적 강제 (2026-10-19)**: brain-drain 이 `BRAINIFY_HEADLESS_ITEM` 으로 담당 항목을 넘기고, `brainify.py commit` 은 다른 항목을 **거부**한다. scan 에 다른 항목이 보여도 건드리지 말 것. 근거: 2026-10-01 한 세션이 4건을 커밋했고 그중 parser-drain 이 **파싱 중**이던 xlsx 를 폴더째 옮겨 유령 `.parse-error` 가 18일간 헬스체크에 떴다. 같은 이유로 `_parse()`·`scan`·`commit` 은 **파싱 진행 중**(`_parse/*.tmp` 또는 빈 `_parse/` + parser-drain 잠금)을 grace 와 무관하게 `pending-drain`/`parsing: true` 로 알리고 commit 을 거부한다 — 시계가 아니라 상태를 본다(9분짜리 파싱은 15분 grace 안에 끝나지 않는다).
 - **`via: pending-drain`(2026-09-18 신설) → commit 하지 말고 이 항목 전체를 건너뛴다**(inbox 그대로 둠, 노트 0). 방금 도착한 첨부라 parser-drain 이 아직 못 본 것뿐 — `pending-ocr`/`pending-transcription`과 달리 완료 시점이 짧고 예측 가능(다음 틱 ≤10분)해서, 즉시 `low` 로 stub 커밋 후 renote 로 고치는 대신 순수 대기가 더 낫다(가짜 "파싱오류" 경고 제거). 다음 brain-drain 재발화(2분 뒤) 때 grace 창이 지나 있으면 정상 처리되거나, 그때도 parser-drain 이 못 따라잡았으면(드묾) 기존 `error`/`low` 경로로 자연히 떨어진다.
 - `via: error`/markdown 비정상·refined.md 부재로 듀얼검증 필요 → `--confidence low` 로 commit(유실 0).
 - **★ 파싱할 대상이 없으면 `low` 가 아니라 `--confidence n/a`** (2026-08-05). `low` 는 *파싱을 시도했는데
@@ -222,8 +223,12 @@ BRAINIFY_INBOX="$H" python3 brainify.py commit  "<item>" --para … --name … -
 **노트는 저절로 고쳐지지 않는다** — `scan` 은 `00_inbox` 미처리 항목만 보고 filed 된 노트는 대상이
 아니기 때문이다. 그 결과 파싱은 끝났는데 플래그만 영구히 남는다(2026-08-05 규명, 7건).
 
-1. **후보** — `brainify.py renote-scan` → `ready: true`(붙어 있는 `_parse` 전부에 `refined.md` 존재)만 처리.
-   `ready: false` 는 아직 refine 대기이므로 **건드리지 말 것**(다음 드레인이 채운다).
+1. **후보** — `brainify.py renote-scan` → `ready: true`(붙어 있는 `_parse` 전부가 `refined.md` 또는 **실패 확정**이고
+   refined 가 하나는 있음)만 처리. `ready: false` 는 아직 refine 대기이므로 **건드리지 말 것**(다음 드레인이 채운다).
+   - **실패 확정 (2026-10-17)**: `.parse-error` 가 있고 refined 가 없는 첨부는 "대기"가 아니라 "추출 실패"다. `renote-read`
+     가 `failed: [{parse_dir, reason}]` 로 넘기니 재작성 본문에 **"첨부 N 중 K 추출 실패 — 사유"** 를 적고
+     `parse_confidence` 는 `low` 로 둔다(원본은 남아 있어 수동 열람 가능, 주간 감사 대상). 예전엔 이 구별이 없어 첨부
+     3개 중 hwp 1개만 실패한 노트가 영구 대기했다(RAS6097 과기부 결과보고서).
 2. **재료** — `brainify.py renote-read "<note>"` → 기존 frontmatter·본문 + `refined.md` 전문 + `_thread.md`.
 3. **판단 — 세 갈래.** 후보의 편차가 크므로 기계적으로 다시 쓰지 말 것:
    - **본문이 이미 풀텍스트와 부합** (촬영본 source-trail 등 원래 충분했던 노트) → **본문 유지**,
@@ -232,6 +237,13 @@ BRAINIFY_INBOX="$H" python3 brainify.py commit  "<item>" --para … --name … -
      문단은 반드시 보존**(병합이지 덮어쓰기가 아니다). `[[wikilink]]`·`sources:` 링크도 유지.
    - **refined.md 가 사실상 빈 텍스트·깨짐** → 다시 쓰지 말고 `--confidence low` 유지로 끝낸다(플래그 존치).
 4. **기록** — `renote-write` 가 `renoted: YYYY-MM-DD` 를 붙인다. 같은 노트를 매 틱 다시 태우지 않게 하는 흔적.
+   - **★ 루프 가드 (2026-10-16)**: `renote-scan` 은 `renoted:` 가 있는 노트를 **그 뒤에 `refined.md` 가 새로 생기거나
+     바뀐 경우에만**(refined mtime > 노트 mtime) 다시 `ready` 로 낸다. 그 전엔 `examined: true` 로 제외. 마커를
+     아무도 읽지 않던 시절, refined.md 가 쓰레기(스캔 한글 PDF 의 docling 한자 OCR)라 세 번째 갈래(low 유지)로
+     끝낸 노트를 다음 틱이 또 집어 **한 노트에 11회·토큰 ≈$4** 를 태웠다(FutureChem 계약서 건). 세 번째 갈래는
+     이제 안전하다 — low 를 유지해도 refined 가 바뀌기 전엔 다시 오지 않는다.
+   - **refined.md 가 깨졌을 때 할 일은 플래그 조작이 아니라 refined 를 고치는 것**이다: `refine.py promote --force`
+     (한글 비율 게이트가 mineru 를 채택) 또는 `/refine` 비전검증. refined 가 새로 써지면 가드가 풀려 renote 가 다시 온다.
 
 헤드리스(`/brainify --headless --renote "<note>"`, brain-drain Phase C)에서도 같다 — 묻지 말고 위 세 갈래로
 판단하고 끝낸다. **본문을 지우는 방향의 재작성은 금지**(유실 > clutter). 확신이 안 서면 플래그만 내린다.
